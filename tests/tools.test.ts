@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Criterion, EdgeCase } from "@/lib/core/types";
 import { checkCoverage } from "@/lib/tools/coverage";
-import { buildExports, buildJiraCsv, buildPlaywrightSpec, commentSafe, csvCell, type ReportInput } from "@/lib/tools/exporters";
+import { buildExports, buildJiraCsv, buildPlaywrightSpec, buildTestPlan, commentSafe, csvCell, type ReportInput } from "@/lib/tools/exporters";
 import { appendScenarios } from "@/lib/agents/designer";
 import { applyPriorityTags, parseGherkin } from "@/lib/tools/gherkin";
 import { parseIssueUrl, sanitizeSearchTerms } from "@/lib/tools/github";
@@ -425,6 +425,21 @@ describe("exporters", () => {
       expect(csv).toContain('"Test: Successful top-up","Test","High","test-case AC-1","');
     });
 
+    it("keeps the @needs-clarification tag on a Playwright stub, and only on a scenario that has it", () => {
+      const spec = buildPlaywrightSpec(outlineInput);
+      // The feature file writes it as @Needs-Clarification: the stub gets the one spelling, before the priority.
+      expect(spec).toContain('test.fixme("Declined card shows an error", { tag: ["@AC-2","@EC-1","@needs-clarification","@P2"] }');
+      expect(spec).toContain('test.fixme("Successful top-up", { tag: ["@AC-1","@P1"] }');
+      expect(spec.match(/@needs-clarification/gi)).toHaveLength(1);
+    });
+
+    it("writes @needs-clarification once on a stub whose scenario carries the tag twice", () => {
+      const twice = { ...outline.scenarios[1], tags: ["@needs-clarification", "@AC-2", "@NEEDS-CLARIFICATION"] };
+      const spec = buildPlaywrightSpec({ ...outlineInput, scenarios: [outline.scenarios[0], twice] });
+      expect(spec).toContain('{ tag: ["@AC-2","@needs-clarification","@P2"] }');
+      expect(spec.match(/@needs-clarification/gi)).toHaveLength(1);
+    });
+
     it("exports a scenario with no Examples exactly as before", () => {
       const plain: ReportInput = { ...outlineInput, ambiguities: [], scenarios: [outline.scenarios[0]], ranking: [outlineInput.ranking[0]] };
       expect(buildJiraCsv(plain)).toBe(
@@ -475,5 +490,68 @@ describe("exporters", () => {
     ]);
     expect(files[0].content).toContain("## Questions for the client");
     expect(files[0].content).toContain("Core flow, a \\| pipe");
+  });
+
+  it("never ends a file name stem in a hyphen when the title is cut at a separator", () => {
+    const title = "Wallet top-up for returning customers with card limits per day";
+    // The fixture only proves something if the 48th character of the uncut stem is a separator.
+    expect(title.toLowerCase().replace(/[^a-z0-9]+/g, "-")[47]).toBe("-");
+    const names = buildExports({ ...input, story: { ...input.story, title } }).map((file) => file.name);
+    expect(names).toEqual([
+      "wallet-top-up-for-returning-customers-with-card-test-plan.md",
+      "wallet-top-up-for-returning-customers-with-card.feature",
+      "wallet-top-up-for-returning-customers-with-card.spec.ts",
+      "wallet-top-up-for-returning-customers-with-card-jira.csv",
+    ]);
+    for (const name of names) {
+      expect(name).not.toContain("--");
+      expect(name).not.toContain("-.");
+    }
+  });
+
+  it("falls back to the name feature when the title is only punctuation", () => {
+    const names = buildExports({ ...input, story: { ...input.story, title: "?! ... --- (#)" } }).map((file) => file.name);
+    expect(names).toEqual(["feature-test-plan.md", "feature.feature", "feature.spec.ts", "feature-jira.csv"]);
+  });
+
+  describe("edge cases without a scenario in the test plan", () => {
+    const fourEdgeCases: EdgeCase[] = [
+      ...edgeCases,
+      { id: "EC-3", title: "Top-up above the daily limit", category: "boundary", relatedAC: "AC-1", severity: "medium", expected: "Rejected" },
+      { id: "EC-4", title: "Card expires during the top-up", category: "error", relatedAC: "AC-2", severity: "medium", expected: "Error shown" },
+    ];
+    const [first, second] = parsed.scenarios;
+    const planFor = (cases: EdgeCase[], scenarios: ReportInput["scenarios"]): string =>
+      buildTestPlan({ ...input, edgeCases: cases, scenarios, validation: checkCoverage({ ...parsed, scenarios }, criteria, cases) });
+    const LINE = /^- Edge cases without a scenario:.*$/m;
+
+    it("names each edge case no scenario is tagged with, in order, with its severity", () => {
+      // EC-1 is tagged in the feature file; EC-3 is tagged here in lower case, which must still count.
+      const plan = planFor(fourEdgeCases, [{ ...first, tags: [...first.tags, "@ec-3"] }, second]);
+      expect(plan).toContain(
+        [
+          "- Edge cases covered: 2 of 4",
+          "- Edge cases without a scenario: EC-2 (low), EC-4 (medium). Only high-severity edge cases must have one.",
+          "- Automated checks: passed",
+        ].join("\n"),
+      );
+      expect(plan).not.toContain("## Known gaps");
+    });
+
+    it("names an uncovered high-severity edge case too, and still lists it under Known gaps", () => {
+      const plan = planFor(edgeCases, [first]);
+      expect(plan.match(LINE)?.[0]).toBe("- Edge cases without a scenario: EC-1 (high), EC-2 (low). Only high-severity edge cases must have one.");
+      expect(plan).toContain("- High-severity edge case EC-1 has no scenario.");
+    });
+
+    it("leaves the line out when every edge case has a scenario or there are no edge cases", () => {
+      const allCovered = planFor(edgeCases, [first, { ...second, tags: [...second.tags, "@EC-2"] }]);
+      expect(allCovered).toContain("- Edge cases covered: 2 of 2\n- Automated checks: passed");
+      expect(allCovered).not.toMatch(LINE);
+
+      const none = planFor([], [first, { ...second, tags: ["@AC-2"] }]);
+      expect(none).toContain("- Edge cases covered: 0 of 0\n- Automated checks: passed");
+      expect(none).not.toMatch(LINE);
+    });
   });
 });

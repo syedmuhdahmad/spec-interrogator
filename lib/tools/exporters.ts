@@ -86,14 +86,22 @@ function clarifySummary(term: string): string {
   return missing ? `Clarify (missing): ${missing[1].trim()}` : `Clarify: ${term}`;
 }
 
+/** A file-name stem of at most 48 characters. The cut can land on a separator, so the end is trimmed again after it. */
 function slug(value: string): string {
   return (
     value
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, 48) || "feature"
+      .slice(0, 48)
+      .replace(/-+$/, "") || "feature"
   );
+}
+
+/** Edge cases that no scenario is tagged with, in edge-case order. Ids are compared without regard to case. */
+function edgeCasesWithoutScenario(edgeCases: EdgeCase[], scenarios: ScenarioInfo[]): EdgeCase[] {
+  const tagged = new Set(scenarios.flatMap((scenario) => scenario.tags.map((tag) => tag.toLowerCase())));
+  return edgeCases.filter((edgeCase) => !tagged.has(`@${edgeCase.id.toLowerCase()}`));
 }
 
 export function buildTestPlan(input: ReportInput): string {
@@ -155,6 +163,11 @@ export function buildTestPlan(input: ReportInput): string {
   out.push(`- Scenarios: ${stats.scenarios} (${stats.steps} steps)`);
   out.push(`- Acceptance criteria covered: ${stats.acCovered} of ${stats.acTotal}`);
   out.push(`- Edge cases covered: ${stats.ecCovered} of ${stats.ecTotal}`);
+  const withoutScenario = edgeCasesWithoutScenario(edgeCases, input.scenarios);
+  if (withoutScenario.length) {
+    const named = withoutScenario.map((edgeCase) => `${edgeCase.id} (${edgeCase.severity})`).join(", ");
+    out.push(`- Edge cases without a scenario: ${named}. Only high-severity edge cases must have one.`);
+  }
   out.push(`- Automated checks: ${validation.ok ? "passed" : "NOT fully passed (see gaps below)"}`);
   out.push("");
 
@@ -193,6 +206,8 @@ export function buildPlaywrightSpec(input: ReportInput): string {
 
   input.scenarios.forEach((scenario, index) => {
     const tags = [...scenario.tags.filter((tag) => /^@(AC|EC)-\d+$/i.test(tag))];
+    // Code puts this tag on every scenario that holds a <TBD placeholder; the stub must not lose it.
+    if (scenario.tags.some((tag) => /^@needs-clarification$/i.test(tag))) tags.push("@needs-clarification");
     const priority = priorities.get(scenario.id);
     if (priority) tags.push(`@${priority}`);
 

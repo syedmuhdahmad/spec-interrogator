@@ -120,7 +120,7 @@ To work on the UI without spending tokens, set `MOCK_LLM=1` in `.env.local`. The
 
 ```bash
 npm run verify    # secret scan, lint, type-check, tests, production build
-npm test          # 102 unit and pipeline tests
+npm test          # 109 unit and pipeline tests
 ```
 
 The pipeline tests run the real orchestrator against a scripted model and assert the things that matter: step order, both feedback loops, loop caps when the Test Designer never produces a valid suite, graceful degradation when an agent fails, the token budget, cancellation, and that invented quotes and citations are caught.
