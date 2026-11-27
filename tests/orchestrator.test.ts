@@ -204,6 +204,34 @@ describe("runPipeline", () => {
     expect(last).toMatchObject({ type: "run_done", partial: true });
   });
 
+  it("says on the timeline why the first reply was rejected when the one retry succeeds", async () => {
+    const llm = new ScriptedLlm((request, callNumber) => {
+      if (callNumber > 1) return undefined;
+      if (request.agent === "planner") return "I'd rather not answer in JSON.";
+      // Valid JSON in the wrong shape: the reason comes from the schema, not from a fixed sentence.
+      if (request.agent === "analyst") return '{"criteria": []}';
+      return undefined;
+    });
+    const { events, last } = await run(STORY, llm);
+
+    const doneMessage = (agent: string) =>
+      (events.find((event) => event.type === "agent" && event.agent === agent && event.status === "done") as { message: string }).message;
+
+    expect(llm.count("planner")).toBe(2);
+    expect(doneMessage("planner")).toContain("Needed one retry: the reply was not valid JSON.");
+    expect(doneMessage("planner")).toMatch(/^Web application, medium risk\. .*not valid JSON\.$/);
+
+    // A reason that arrives without a full stop is given exactly one.
+    expect(llm.count("analyst")).toBe(2);
+    // ...and the schema's leading cross mark is dropped.
+    expect(doneMessage("analyst")).toMatch(/Needed one retry: at least one acceptance criterion is required\.$/);
+    expect(doneMessage("analyst")).not.toMatch(/\.\.$/);
+
+    const failed = events.filter((event) => event.type === "agent" && event.status === "error" && ["planner", "analyst"].includes(event.agent));
+    expect(failed).toEqual([]);
+    expect(last).toMatchObject({ type: "run_done" });
+  });
+
   it("stops with a clear message when the Analyst cannot produce criteria", async () => {
     const llm = new ScriptedLlm((request) => (request.agent === "analyst" ? '{"criteria": []}' : undefined));
     const { last } = await run(STORY, llm);

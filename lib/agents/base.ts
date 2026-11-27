@@ -77,7 +77,7 @@ async function callAgent<T>(context: AgentContext, call: AgentCall<T>): Promise<
           ms: context.now() - started,
           tokensIn,
           tokensOut,
-          message: attempt > 1 ? `${summary} Needed one retry.` : summary,
+          message: attempt > 1 ? `${summary} Needed one retry: ${shortReason(lastProblem)}` : summary,
         });
         return value;
       } catch (error) {
@@ -116,12 +116,21 @@ async function callAgent<T>(context: AgentContext, call: AgentCall<T>): Promise<
   }
 }
 
-/** One line saying why a reply was rejected, short enough for the timeline. */
+/**
+ * One line saying why a reply was rejected, short enough for the timeline.
+ * It always ends a sentence (one full stop, or the "…" of a shortened line),
+ * because it is the last thing in the message it is added to.
+ */
 function shortReason(problem: string): string {
   if (/cut off/.test(problem)) return "the reply was cut off at its length limit.";
   if (/not valid JSON/.test(problem)) return "the reply was not valid JSON.";
-  const firstLine = problem.split("\n")[0].replace(/\s+/g, " ").trim();
-  return firstLine.length > 110 ? `${firstLine.slice(0, 110)}…` : firstLine;
+  // Schema problems arrive with a leading cross mark, which is noise on the timeline.
+  const firstLine = problem.split("\n")[0].replace(/^[\s✖✗×]+/, "").replace(/\s+/g, " ").trim();
+  if (firstLine.length > 110) return `${firstLine.slice(0, 110)}…`;
+  // Drop any punctuation the line trails off with, then close it with exactly one full stop.
+  const bare = firstLine.replace(/[\s.:;,]+$/, "");
+  if (!bare) return "the reply could not be used.";
+  return /[!?…]$/.test(bare) ? bare : `${bare}.`;
 }
 
 /** Makes one model call, cut short if it outlasts the time this run can still afford. */
