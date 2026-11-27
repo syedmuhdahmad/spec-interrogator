@@ -93,7 +93,66 @@ export function checkCoverage(
   };
 }
 
-/** One line for the timeline, e.g. "2 criteria uncovered, 1 scenario problem". */
+/** The timeline shows the line whole, so it has to stay short enough to read at a glance. */
+const MAX_LINE = 320;
+/** A scenario name longer than this is shortened. */
+const MAX_NAME = 60;
+/** How many scenario problems are spelled out. The rest are counted. */
+const NAMED_PROBLEMS = 2;
+/** A problem cut shorter than this says too little, so one problem fewer is named instead. */
+const MIN_PROBLEM = 24;
+
+/** Model-written names can hold line breaks and runs of spaces. The timeline line must stay one line. */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** Cuts text to at most `max` characters, the last of them "…". Never leaves half of a surrogate pair. */
+function shorten(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let kept = text.slice(0, Math.max(0, max - 1));
+  const last = kept.charCodeAt(kept.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) kept = kept.slice(0, -1);
+  return `${kept.trimEnd()}…`;
+}
+
+function scenarioLabel(name: string): string {
+  const tidy = oneLine(name);
+  return tidy ? `"${shorten(tidy, MAX_NAME)}"` : "(unnamed scenario)";
+}
+
+/**
+ * Names the first scenario problems so a reader can tell what the Validator
+ * objected to, within `budget` characters:
+ * `3 scenario problem(s): "Name": problem; "Other": problem. (and 1 more)`.
+ * When it does not fit, the last named problem is shortened; when that would
+ * leave too little of it, one problem fewer is named; at worst only the count
+ * is left.
+ */
+function describeStepIssues(issues: StepIssue[], budget: number): string {
+  const head = `${issues.length} scenario problem(s)`;
+  for (let named = Math.min(NAMED_PROBLEMS, issues.length); named > 0; named--) {
+    const labels = issues.slice(0, named).map((issue) => scenarioLabel(issue.scenario));
+    // Each problem is a sentence. Its full stop is dropped here and written once, after the last one.
+    const problems = issues.slice(0, named).map((issue) => oneLine(issue.problem).replace(/[.\s]+$/, ""));
+    const more = issues.length - named;
+    const tail = more ? ` (and ${more} more)` : "";
+    const render = (lastProblem: string) =>
+      `${head}: ${labels.map((label, index) => `${label}: ${index === named - 1 ? lastProblem : problems[index]}`).join("; ")}${tail}`;
+
+    const last = problems[named - 1];
+    const full = render(`${last}.`);
+    if (full.length <= budget) return full;
+    const room = last.length + 1 - (full.length - budget);
+    if (room >= Math.min(MIN_PROBLEM, last.length)) return render(shorten(last, room));
+  }
+  return head;
+}
+
+/**
+ * One line for the timeline and for the reason of a fix round, e.g.
+ * `uncovered: AC-2; 1 scenario problem(s): "Top-up": There is no Then step: nothing is being checked.`
+ */
 export function describeValidation(report: ValidationReport): string {
   if (report.ok) {
     const { scenarios, acCovered, acTotal, ecCovered, ecTotal } = report.stats;
@@ -103,6 +162,9 @@ export function describeValidation(report: ValidationReport): string {
   if (report.parseErrors.length) parts.push(`${report.parseErrors.length} parse error(s)`);
   if (report.uncoveredACs.length) parts.push(`uncovered: ${report.uncoveredACs.join(", ")}`);
   if (report.uncoveredECs.length) parts.push(`high-risk edge cases uncovered: ${report.uncoveredECs.join(", ")}`);
-  if (report.stepIssues.length) parts.push(`${report.stepIssues.length} scenario problem(s)`);
-  return parts.join("; ");
+  if (report.stepIssues.length) {
+    const used = parts.length ? parts.join("; ").length + 2 : 0;
+    parts.push(describeStepIssues(report.stepIssues, MAX_LINE - used));
+  }
+  return shorten(parts.join("; "), MAX_LINE);
 }

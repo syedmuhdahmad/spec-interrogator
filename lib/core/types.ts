@@ -105,7 +105,22 @@ export interface ScenarioInfo {
   exampleRows: number;
   /** The Examples tables of a Scenario Outline, one entry per Examples block. Absent when there are none. */
   examples?: ExamplesTable[];
-  steps: { keyword: string; kind: string; text: string }[];
+  /**
+   * The Background steps that run before this scenario: the feature's first,
+   * then those of the Rule the scenario sits in. Absent when there are none.
+   * They are kept out of `steps` so the coverage check and the step count
+   * only ever see the scenario's own steps.
+   */
+  background?: ScenarioStep[];
+  steps: ScenarioStep[];
+}
+
+export interface ScenarioStep {
+  /** The keyword as written: Given, When, Then, And, But. */
+  keyword: string;
+  /** What the step does (Context, Action, Outcome). "And" and "But" take the kind of the step before them. */
+  kind: string;
+  text: string;
 }
 
 export interface ExamplesTable {

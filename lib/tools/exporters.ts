@@ -214,6 +214,10 @@ export function buildPlaywrightSpec(input: ReportInput): string {
     if (index > 0) out.push("");
     out.push(`  test.fixme(${JSON.stringify(scenario.name)}, { tag: ${JSON.stringify(tags)} }, async ({ page }) => {`);
     out.push("    void page;");
+    // The Background sets up what the scenario's own steps rely on (a starting balance, a signed-in customer).
+    for (const step of scenario.background ?? []) {
+      out.push(`    // ${commentSafe(`Background: ${step.keyword} ${step.text}`)}`);
+    }
     for (const step of scenario.steps) {
       out.push(`    // ${commentSafe(`${step.keyword} ${step.text}`)}`);
     }
@@ -248,6 +252,10 @@ export function buildJiraCsv(input: ReportInput): string {
   for (const item of input.ranking) {
     const scenario = scenarioById.get(item.id);
     const steps = scenario ? scenario.steps.map((step) => `${step.keyword} ${step.text}`).join("\n") : "";
+    // Without the Background a test case can assert a result ("balance is 70.00") with nothing saying where it started.
+    const background = scenario?.background?.length
+      ? ["Background:", ...scenario.background.map((step) => `${step.keyword} ${step.text}`), ""]
+      : [];
     const labels = ["test-case", ...item.tags.filter((tag) => /^@(AC|EC)-\d+$/i.test(tag)).map((tag) => tag.slice(1))];
     if ([...item.tags, ...(scenario?.tags ?? [])].some((tag) => /^@needs-clarification$/i.test(tag))) {
       labels.push("needs-clarification");
@@ -259,7 +267,7 @@ export function buildJiraCsv(input: ReportInput): string {
       "Test",
       JIRA_PRIORITY[item.priority] ?? "Medium",
       labels.join(" "),
-      [`Priority reason: ${item.reason}`, "", steps, ...examples].join("\n").trim(),
+      [`Priority reason: ${item.reason}`, "", ...background, steps, ...examples].join("\n").trim(),
     ]);
   }
 

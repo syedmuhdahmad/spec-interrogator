@@ -1,6 +1,6 @@
 import { AstBuilder, GherkinClassicTokenMatcher, Parser } from "@cucumber/gherkin";
 import { IdGenerator } from "@cucumber/messages";
-import type { ParseError, ScenarioInfo } from "@/lib/core/types";
+import type { ParseError, ScenarioInfo, ScenarioStep } from "@/lib/core/types";
 
 export interface ParsedFeature {
   ok: boolean;
@@ -14,12 +14,18 @@ interface AstTag {
   location: { line: number };
 }
 
+interface AstStep {
+  keyword: string;
+  keywordType?: string;
+  text: string;
+}
+
 interface AstScenario {
   keyword: string;
   name: string;
   location: { line: number };
   tags: readonly AstTag[];
-  steps: readonly { keyword: string; keywordType?: string; text: string }[];
+  steps: readonly AstStep[];
   examples: readonly { tableHeader?: AstTableRow; tableBody?: readonly AstTableRow[] }[];
 }
 
@@ -28,8 +34,22 @@ interface AstTableRow {
 }
 
 interface AstChild {
+  background?: { steps?: readonly AstStep[] };
   scenario?: AstScenario;
   rule?: { tags?: readonly AstTag[]; children: readonly AstChild[] };
+}
+
+/** Turns parser steps into ours. "And"/"But" continue whatever kind of step came before them. */
+function toSteps(steps: readonly AstStep[]): ScenarioStep[] {
+  let previousKind = "Unknown";
+  return steps.map((step) => {
+    const kind =
+      step.keywordType && step.keywordType !== "Conjunction" && step.keywordType !== "Unknown"
+        ? step.keywordType
+        : previousKind;
+    previousKind = kind;
+    return { keyword: step.keyword.trim(), kind, text: step.text };
+  });
 }
 
 /**
@@ -48,29 +68,27 @@ export function parseGherkin(text: string): ParsedFeature {
 
     // Tags on the Feature line are deliberately not inherited: one line of
     // "@AC-1 @AC-2 ..." there would otherwise claim coverage for everything.
-    const collected: { scenario: AstScenario; inherited: string[] }[] = [];
+    const collected: { scenario: AstScenario; inherited: string[]; background: ScenarioStep[] }[] = [];
 
-    const walk = (children: readonly AstChild[], inherited: string[]) => {
+    // A Background applies to every scenario at its own level and below it, so
+    // a scenario inside a Rule runs the feature's Background and then the Rule's.
+    // Its steps are kept apart from the scenario's own: see ScenarioInfo.
+    const walk = (children: readonly AstChild[], inherited: string[], outerBackground: ScenarioStep[]) => {
+      const background = [
+        ...outerBackground,
+        ...children.flatMap((child) => (child.background ? toSteps(child.background.steps ?? []) : [])),
+      ];
       for (const child of children) {
-        if (child.scenario) collected.push({ scenario: child.scenario, inherited });
+        if (child.scenario) collected.push({ scenario: child.scenario, inherited, background });
         if (child.rule) {
-          walk(child.rule.children, [...inherited, ...(child.rule.tags ?? []).map((tag) => tag.name)]);
+          walk(child.rule.children, [...inherited, ...(child.rule.tags ?? []).map((tag) => tag.name)], background);
         }
       }
     };
-    walk(feature.children as readonly AstChild[], []);
+    walk(feature.children as readonly AstChild[], [], []);
 
-    const scenarios = collected.map(({ scenario, inherited }, index): ScenarioInfo => {
-      let previousKind = "Unknown";
-      const steps = scenario.steps.map((step) => {
-        // "And"/"But" continue whatever kind of step came before them.
-        const kind =
-          step.keywordType && step.keywordType !== "Conjunction" && step.keywordType !== "Unknown"
-            ? step.keywordType
-            : previousKind;
-        previousKind = kind;
-        return { keyword: step.keyword.trim(), kind, text: step.text };
-      });
+    const scenarios = collected.map(({ scenario, inherited, background }, index): ScenarioInfo => {
+      const steps = toSteps(scenario.steps);
       // An Examples block with no table at all carries nothing worth exporting.
       const examples = scenario.examples
         .map((example) => ({
@@ -87,6 +105,8 @@ export function parseGherkin(text: string): ParsedFeature {
         isOutline: /outline|template/i.test(scenario.keyword),
         exampleRows: scenario.examples.reduce((sum, example) => sum + (example.tableBody?.length ?? 0), 0),
         ...(examples.length ? { examples } : {}),
+        // Each scenario gets its own copy, so changing one cannot change another.
+        ...(background.length ? { background: background.map((step) => ({ ...step })) } : {}),
         steps,
       };
     });

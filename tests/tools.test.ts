@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Criterion, EdgeCase } from "@/lib/core/types";
-import { checkCoverage } from "@/lib/tools/coverage";
+import type { Criterion, EdgeCase, StepIssue, ValidationReport } from "@/lib/core/types";
+import { checkCoverage, describeValidation } from "@/lib/tools/coverage";
 import { buildExports, buildJiraCsv, buildPlaywrightSpec, buildTestPlan, commentSafe, csvCell, type ReportInput } from "@/lib/tools/exporters";
 import { appendScenarios } from "@/lib/agents/designer";
 import { applyPriorityTags, parseGherkin } from "@/lib/tools/gherkin";
@@ -55,7 +55,113 @@ const OUTLINE = `Feature: Wallet top-up
       | an expired card    | the expiry date |
 `;
 
+/** The scenarios of BACKGROUND, without its Background block. */
+const NO_BACKGROUND = `Feature: Top up wallet with a debit card
+
+  @AC-1
+  Scenario: Successful top-up
+    Given the customer enters a top-up amount of 20.00
+    When the customer confirms the top-up
+    Then the wallet balance is shown as 70.00
+
+  @AC-2 @EC-1
+  Scenario: Declined card
+    When the card is declined
+    Then the wallet balance is shown as 50.00
+`;
+
+const BACKGROUND = NO_BACKGROUND.replace(
+  "\n  @AC-1\n",
+  "\n  Background:\n    Given a signed-in customer with a wallet balance of 50.00\n    And a saved debit card\n\n  @AC-1\n",
+);
+
+const RULE_BACKGROUND = `Feature: Top up wallet with a debit card
+
+  Background:
+    Given a signed-in customer with a wallet balance of 50.00
+
+  @AC-1
+  Scenario: Successful top-up
+    When the customer tops up 20.00
+    Then the wallet balance is shown as 70.00
+
+  Rule: A daily limit applies
+
+    Background:
+      Given the daily limit is 500.00
+      And the customer has already topped up 450.00 today
+
+    @AC-2 @EC-1
+    Scenario: Top-up above the daily limit
+      When the customer tops up 60.00
+      Then the top-up is refused
+
+  Rule: A declined card changes nothing
+
+    @AC-2
+    Scenario: Declined card
+      When the card is declined
+      Then the wallet balance is shown as 50.00
+`;
+
+const SIGNED_IN = { keyword: "Given", kind: "Context", text: "a signed-in customer with a wallet balance of 50.00" };
+
 describe("parseGherkin", () => {
+  it("gives the feature's Background steps to every scenario and keeps them out of the scenario's own steps", () => {
+    expect(BACKGROUND).toContain("Background:");
+    const parsed = parseGherkin(BACKGROUND);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.scenarios.map((scenario) => scenario.name)).toEqual(["Successful top-up", "Declined card"]);
+    for (const scenario of parsed.scenarios) {
+      // "And" continues the Given that came before it.
+      expect(scenario.background).toEqual([SIGNED_IN, { keyword: "And", kind: "Context", text: "a saved debit card" }]);
+    }
+    // The scenarios themselves are exactly what they are without the Background.
+    const plain = parseGherkin(NO_BACKGROUND);
+    expect(parsed.scenarios.map((scenario) => scenario.steps)).toEqual(plain.scenarios.map((scenario) => scenario.steps));
+    expect(parsed.scenarios.map((scenario) => scenario.tags)).toEqual(plain.scenarios.map((scenario) => scenario.tags));
+  });
+
+  it("puts a Rule's Background after the feature's, and only on that Rule's scenarios", () => {
+    const parsed = parseGherkin(RULE_BACKGROUND);
+    expect(parsed.ok).toBe(true);
+    const [outside, limited, declined] = parsed.scenarios;
+    expect(outside.background).toEqual([SIGNED_IN]);
+    expect(limited.name).toBe("Top-up above the daily limit");
+    expect(limited.background).toEqual([
+      SIGNED_IN,
+      { keyword: "Given", kind: "Context", text: "the daily limit is 500.00" },
+      { keyword: "And", kind: "Context", text: "the customer has already topped up 450.00 today" },
+    ]);
+    // The next Rule has no Background of its own and must not pick up its neighbour's.
+    expect(declined.name).toBe("Declined card");
+    expect(declined.background).toEqual([SIGNED_IN]);
+    expect(limited.steps.map((step) => step.text)).toEqual(["the customer tops up 60.00", "the top-up is refused"]);
+  });
+
+  it("gives a Background written only inside a Rule to that Rule's scenarios alone", () => {
+    const onlyInRule = RULE_BACKGROUND.replace("  Background:\n    Given a signed-in customer with a wallet balance of 50.00\n\n", "");
+    const [outside, limited, declined] = parseGherkin(onlyInRule).scenarios;
+    expect(outside).not.toHaveProperty("background");
+    expect(limited.background?.map((step) => step.text)).toEqual(["the daily limit is 500.00", "the customer has already topped up 450.00 today"]);
+    expect(declined).not.toHaveProperty("background");
+  });
+
+  it("leaves the background field out when there is no Background, or one with no steps", () => {
+    for (const scenario of parseGherkin(NO_BACKGROUND).scenarios) expect(scenario).not.toHaveProperty("background");
+    for (const scenario of parseGherkin(GOOD).scenarios) expect(scenario).not.toHaveProperty("background");
+    const empty = parseGherkin(NO_BACKGROUND.replace("\n  @AC-1\n", "\n  Background:\n\n  @AC-1\n"));
+    expect(empty.ok).toBe(true);
+    expect(empty.scenarios).toHaveLength(2);
+    for (const scenario of empty.scenarios) expect(scenario).not.toHaveProperty("background");
+  });
+
+  it("gives each scenario its own copy of the Background steps", () => {
+    const [first, second] = parseGherkin(BACKGROUND).scenarios;
+    if (first.background) first.background[0].text = "changed";
+    expect(second.background?.[0]).toEqual(SIGNED_IN);
+  });
+
   it("reads the Examples table of a Scenario Outline, header and rows", () => {
     const parsed = parseGherkin(OUTLINE);
     expect(parsed.ok).toBe(true);
@@ -184,6 +290,172 @@ describe("checkCoverage", () => {
     expect(report.ok).toBe(false);
     expect(report.parseErrors.length).toBeGreaterThan(0);
     expect(report.uncoveredACs).toEqual(["AC-1", "AC-2"]);
+  });
+
+  it("counts the same steps with or without a Background", () => {
+    const withBackground = checkCoverage(parseGherkin(BACKGROUND), criteria, edgeCases);
+    const without = checkCoverage(parseGherkin(NO_BACKGROUND), criteria, edgeCases);
+    expect(without.stats.steps).toBe(5);
+    expect(withBackground.stats.steps).toBe(5);
+    expect(withBackground).toEqual(without);
+    expect(withBackground.ok).toBe(true);
+  });
+
+  it("does not let a Background step stand in for a scenario's own When or Then", () => {
+    const leaning = [
+      "Feature: Top up wallet with a debit card",
+      "  Background:",
+      "    Given a signed-in customer with a wallet balance of 50.00",
+      "    When the customer opens the top-up page",
+      "    Then the top-up form is shown",
+      "  @AC-1 @AC-2 @EC-1",
+      "  Scenario: Top-up form",
+      "    Given the customer has a saved debit card",
+    ].join("\n");
+    const parsed = parseGherkin(leaning);
+    expect(parsed.scenarios[0].background).toHaveLength(3);
+    const report = checkCoverage(parsed, criteria, edgeCases);
+    expect(report.stats.steps).toBe(1);
+    expect(report.stepIssues.map((issue) => issue.problem)).toEqual([
+      "There is no When step: nothing is being done.",
+      "There is no Then step: nothing is being checked.",
+    ]);
+  });
+});
+
+describe("describeValidation", () => {
+  const failing = (stepIssues: StepIssue[], rest: Partial<ValidationReport> = {}): ValidationReport => ({
+    ok: false,
+    parseErrors: [],
+    uncoveredACs: [],
+    uncoveredECs: [],
+    unknownTags: [],
+    stepIssues,
+    stats: { scenarios: stepIssues.length, steps: 0, acCovered: 0, acTotal: 2, ecCovered: 0, ecTotal: 2 },
+    ...rest,
+  });
+  const NO_THEN = "There is no Then step: nothing is being checked.";
+  const NO_TAG = "No @AC-n tag: the scenario is not linked to an acceptance criterion.";
+
+  it("keeps the text for a suite that passed", () => {
+    expect(describeValidation(checkCoverage(parseGherkin(GOOD), criteria, edgeCases))).toBe(
+      "Valid Gherkin. 2 scenarios cover 2/2 criteria and 1/2 edge cases.",
+    );
+  });
+
+  it("names the scenario and the problem when there is one scenario problem", () => {
+    const noThen = "Feature: Wallet top-up\n  @AC-1 @AC-2 @EC-1\n  Scenario: Top-up without a check\n    Given a wallet\n    When the customer tops up 20.00\n";
+    expect(describeValidation(checkCoverage(parseGherkin(noThen), criteria, edgeCases))).toBe(
+      '1 scenario problem(s): "Top-up without a check": There is no Then step: nothing is being checked.',
+    );
+  });
+
+  it("names the first two of three scenario problems and counts the third", () => {
+    const three = [
+      "Feature: Wallet top-up",
+      "  Scenario: Double-tap on confirm",
+      "    When the customer taps confirm twice",
+      "    Then the wallet is topped up once",
+      "  @AC-1 @AC-2 @EC-1",
+      "  Scenario: Top-up",
+      "    When the customer tops up 20.00",
+      "  @AC-1",
+      "  Scenario Outline: Rejected amounts",
+      "    When the customer tops up <amount>",
+      "    Then the top-up is refused",
+    ].join("\n");
+    const report = checkCoverage(parseGherkin(three), criteria, edgeCases);
+    expect(report.stepIssues).toHaveLength(3);
+    const line = describeValidation(report);
+    expect(line).toBe(
+      '3 scenario problem(s): "Double-tap on confirm": No @AC-n tag: the scenario is not linked to an acceptance criterion; "Top-up": There is no Then step: nothing is being checked. (and 1 more)',
+    );
+    expect(line).not.toContain(".;");
+  });
+
+  it("names both problems and ends in one full stop when there are exactly two", () => {
+    const line = describeValidation(failing([
+      { scenario: "Double-tap on confirm", line: 3, problem: NO_TAG },
+      { scenario: "Top-up", line: 8, problem: NO_THEN },
+    ]));
+    expect(line).toBe(
+      '2 scenario problem(s): "Double-tap on confirm": No @AC-n tag: the scenario is not linked to an acceptance criterion; "Top-up": There is no Then step: nothing is being checked.',
+    );
+  });
+
+  it("keeps the parts about parse errors and coverage as they were, before the scenario problems", () => {
+    const partial = "Feature: Wallet top-up\n  @AC-1\n  Scenario: Only one\n    When the customer tops up 20.00\n    Then the balance is 70.00\n";
+    expect(describeValidation(checkCoverage(parseGherkin(partial), criteria, edgeCases))).toBe(
+      "uncovered: AC-2; high-risk edge cases uncovered: EC-1",
+    );
+    expect(describeValidation(checkCoverage(parseGherkin("nonsense"), criteria, edgeCases))).toBe(
+      "1 parse error(s); uncovered: AC-1, AC-2; high-risk edge cases uncovered: EC-1",
+    );
+    const line = describeValidation(
+      failing([{ scenario: "Top-up", line: 3, problem: NO_THEN }], { uncoveredACs: ["AC-2"], uncoveredECs: ["EC-1"] }),
+    );
+    expect(line).toBe(`uncovered: AC-2; high-risk edge cases uncovered: EC-1; 1 scenario problem(s): "Top-up": ${NO_THEN}`);
+  });
+
+  it("shortens a very long scenario name and keeps the line on one line", () => {
+    const longName = `Top-up of 20.00 by a returning customer \n\t with   a saved debit card, ${"a very long name, ".repeat(8)}the end`;
+    const line = describeValidation(failing([{ scenario: longName, line: 3, problem: NO_THEN }]));
+    expect(line).toBe(
+      `1 scenario problem(s): "Top-up of 20.00 by a returning customer with a saved debit…": ${NO_THEN}`,
+    );
+    const shown = /"([^"]*)"/.exec(line)?.[1] ?? "";
+    expect(shown.length).toBeLessThanOrEqual(60);
+    expect(line).not.toMatch(/[\r\n\t]|\s{2}/);
+  });
+
+  it("leaves a scenario name of exactly 60 characters whole", () => {
+    const name = "Top-up ".repeat(9).trim().slice(0, 60);
+    expect(name).toHaveLength(60);
+    expect(describeValidation(failing([{ scenario: name, line: 3, problem: NO_THEN }]))).toBe(
+      `1 scenario problem(s): "${name}": ${NO_THEN}`,
+    );
+  });
+
+  it("says so when the scenario with the problem has no name", () => {
+    expect(describeValidation(failing([{ scenario: "  ", line: 3, problem: "The scenario has no name." }]))).toBe(
+      "1 scenario problem(s): (unnamed scenario): The scenario has no name.",
+    );
+  });
+
+  it("shortens the last named problem to keep the line at 320 characters", () => {
+    const wordy = `The top-up amount is checked ${"against the daily limit and ".repeat(6)}nothing else.`;
+    expect(wordy.length).toBeGreaterThan(190);
+    const line = describeValidation(failing([
+      { scenario: "Double-tap on confirm", line: 3, problem: NO_TAG },
+      { scenario: "Top-up above the daily limit", line: 8, problem: wordy },
+      { scenario: "Declined card", line: 12, problem: NO_THEN },
+    ]));
+    expect(line.length).toBeLessThanOrEqual(320);
+    expect(line.length).toBeGreaterThan(300);
+    expect(line.startsWith('3 scenario problem(s): "Double-tap on confirm": No @AC-n tag: the scenario is not linked to an acceptance criterion; "Top-up above the daily limit": The top-up amount is checked')).toBe(true);
+    expect(line.endsWith("… (and 1 more)")).toBe(true);
+  });
+
+  it("names one problem fewer when there is no room for two, and never passes 320 characters", () => {
+    const wordy = `The top-up amount is checked ${"against the daily limit and ".repeat(12)}nothing else.`;
+    const issues: StepIssue[] = [
+      { scenario: "Double-tap on confirm", line: 3, problem: wordy },
+      { scenario: "Top-up above the daily limit", line: 8, problem: wordy },
+      { scenario: "Declined card", line: 12, problem: NO_THEN },
+    ];
+    const line = describeValidation(failing(issues));
+    expect(line.length).toBeLessThanOrEqual(320);
+    expect(line.length).toBeGreaterThan(300);
+    expect(line.startsWith('3 scenario problem(s): "Double-tap on confirm": The top-up amount is checked')).toBe(true);
+    expect(line).not.toContain("Top-up above the daily limit");
+    expect(line.endsWith("… (and 2 more)")).toBe(true);
+
+    // Even a list of uncovered criteria that fills the line by itself cannot push it past the limit.
+    const many = Array.from({ length: 80 }, (_, index) => `AC-${index + 1}`);
+    const crowded = describeValidation(failing(issues, { uncoveredACs: many }));
+    expect(crowded.length).toBeLessThanOrEqual(320);
+    expect(crowded.startsWith("uncovered: AC-1, AC-2, AC-3")).toBe(true);
+    expect(crowded.endsWith("…")).toBe(true);
   });
 });
 
@@ -477,6 +749,172 @@ describe("exporters", () => {
       const spec = buildPlaywrightSpec(stripped);
       expect(spec).not.toContain("// Examples:");
       expect(spec).toContain("// Scenario Outline: run once per Examples row (2).");
+    });
+  });
+
+  describe("Background steps", () => {
+    const inputFor = (feature: string): ReportInput => {
+      const withBackground = parseGherkin(feature);
+      return {
+        ...input,
+        ambiguities: [],
+        feature,
+        featureName: withBackground.featureName,
+        scenarios: withBackground.scenarios,
+        validation: checkCoverage(withBackground, criteria, edgeCases),
+        ranking: withBackground.scenarios.map((scenario, index) => ({
+          id: scenario.id,
+          scenario: scenario.name,
+          priority: index === 0 ? "P1" : "P2",
+          reason: index === 0 ? "Core flow" : "Common failure",
+          tags: scenario.tags,
+        })),
+      };
+    };
+    const backgroundInput = inputFor(BACKGROUND);
+
+    it("puts the Background as a block before each scenario's steps in the Jira description", () => {
+      const csv = buildJiraCsv(backgroundInput);
+      expect(csv).toBe(
+        [
+          '"Summary","Issue Type","Priority","Labels","Description"',
+          [
+            '"Test: Successful top-up","Test","High","test-case AC-1","Priority reason: Core flow',
+            "",
+            "Background:",
+            "Given a signed-in customer with a wallet balance of 50.00",
+            "And a saved debit card",
+            "",
+            "Given the customer enters a top-up amount of 20.00",
+            "When the customer confirms the top-up",
+            'Then the wallet balance is shown as 70.00"',
+          ].join("\n"),
+          [
+            '"Test: Declined card","Test","Medium","test-case AC-2 EC-1","Priority reason: Common failure',
+            "",
+            "Background:",
+            "Given a signed-in customer with a wallet balance of 50.00",
+            "And a saved debit card",
+            "",
+            "When the card is declined",
+            'Then the wallet balance is shown as 50.00"',
+          ].join("\n"),
+          "",
+        ].join("\r\n"),
+      );
+    });
+
+    it("writes each Background step as a comment before the scenario's steps in the Playwright stub", () => {
+      const spec = buildPlaywrightSpec(backgroundInput);
+      expect(spec).toContain(
+        [
+          '  test.fixme("Successful top-up", { tag: ["@AC-1","@P1"] }, async ({ page }) => {',
+          "    void page;",
+          "    // Background: Given a signed-in customer with a wallet balance of 50.00",
+          "    // Background: And a saved debit card",
+          "    // Given the customer enters a top-up amount of 20.00",
+          "    // When the customer confirms the top-up",
+          "    // Then the wallet balance is shown as 70.00",
+          "  });",
+        ].join("\n"),
+      );
+      expect(spec).toContain(
+        [
+          "    void page;",
+          "    // Background: Given a signed-in customer with a wallet balance of 50.00",
+          "    // Background: And a saved debit card",
+          "    // When the card is declined",
+        ].join("\n"),
+      );
+      expect(spec.match(/\/\/ Background: /g)).toHaveLength(4);
+    });
+
+    it("shows the feature's Background and then the Rule's, only on the Rule's scenarios", () => {
+      const ruleInput = inputFor(RULE_BACKGROUND);
+      const csv = buildJiraCsv(ruleInput);
+      expect(csv).toContain(
+        [
+          "Background:",
+          "Given a signed-in customer with a wallet balance of 50.00",
+          "Given the daily limit is 500.00",
+          "And the customer has already topped up 450.00 today",
+          "",
+          "When the customer tops up 60.00",
+          'Then the top-up is refused"',
+        ].join("\n"),
+      );
+      expect(csv.match(/the daily limit is 500\.00/g)).toHaveLength(1);
+      expect(csv.match(/\nBackground:\n/g)).toHaveLength(3);
+
+      const spec = buildPlaywrightSpec(ruleInput);
+      expect(spec).toContain(
+        [
+          "    // Background: Given a signed-in customer with a wallet balance of 50.00",
+          "    // Background: Given the daily limit is 500.00",
+          "    // Background: And the customer has already topped up 450.00 today",
+          "    // When the customer tops up 60.00",
+        ].join("\n"),
+      );
+      expect(spec.match(/\/\/ Background: Given the daily limit/g)).toHaveLength(1);
+    });
+
+    it("keeps the Examples table after the steps when a Scenario Outline has a Background", () => {
+      const both = OUTLINE.replace("\n  @AC-1\n", "\n  Background:\n    Given a signed-in customer with a wallet balance of 50.00\n\n  @AC-1\n");
+      const bothInput = inputFor(both);
+      expect(buildJiraCsv(bothInput)).toContain(
+        [
+          "Background:",
+          "Given a signed-in customer with a wallet balance of 50.00",
+          "",
+          "Given the card is declined because of <reason>",
+          "When the customer confirms the top-up",
+          "Then the message names <detail>",
+          "",
+          "Examples:",
+          "| reason | detail |",
+        ].join("\n"),
+      );
+      expect(buildPlaywrightSpec(bothInput)).toContain(
+        [
+          "    // Background: Given a signed-in customer with a wallet balance of 50.00",
+          "    // Given the card is declined because of <reason>",
+          "    // When the customer confirms the top-up",
+          "    // Then the message names <detail>",
+          "    // Examples:",
+        ].join("\n"),
+      );
+    });
+
+    it("keeps a Background step inside its comment whatever line-break characters it contains", () => {
+      const hostile = "x\u2028}); require('child_process').exec('id'); test('y', async () => {\r//\u2029z\u0085";
+      const [first] = backgroundInput.scenarios;
+      const spec = buildPlaywrightSpec({
+        ...backgroundInput,
+        scenarios: [{ ...first, background: [{ keyword: "Given", kind: "Context", text: hostile }] }],
+      });
+      const lines = spec.split(/\r\n|[\n\r\u2028\u2029\u0085]/);
+      expect(lines.filter((line) => line.includes("child_process"))).toHaveLength(1);
+      expect(lines.filter((line) => line.includes("child_process") && !line.trimStart().startsWith("// Background: Given x")).length).toBe(0);
+    });
+
+    it("exports a feature with no Background exactly as it did before", () => {
+      const plainInput = inputFor(NO_BACKGROUND);
+      const csv = buildJiraCsv(plainInput);
+      const spec = buildPlaywrightSpec(plainInput);
+      expect(csv).not.toContain("Background");
+      expect(spec).not.toContain("Background");
+      expect(csv).toBe(
+        [
+          '"Summary","Issue Type","Priority","Labels","Description"',
+          '"Test: Successful top-up","Test","High","test-case AC-1","Priority reason: Core flow\n\nGiven the customer enters a top-up amount of 20.00\nWhen the customer confirms the top-up\nThen the wallet balance is shown as 70.00"',
+          '"Test: Declined card","Test","Medium","test-case AC-2 EC-1","Priority reason: Common failure\n\nWhen the card is declined\nThen the wallet balance is shown as 50.00"',
+          "",
+        ].join("\r\n"),
+      );
+      // A scenario whose background field is an empty list is exported the same way.
+      const emptied: ReportInput = { ...backgroundInput, scenarios: backgroundInput.scenarios.map((scenario) => ({ ...scenario, background: [] })) };
+      expect(buildJiraCsv(emptied)).toBe(csv);
+      expect(buildPlaywrightSpec(emptied)).toBe(spec);
     });
   });
 
