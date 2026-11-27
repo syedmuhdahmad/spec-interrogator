@@ -12,13 +12,14 @@ Every agent working on this repository reads this file first and updates it befo
 
 ## Where things stand
 
-Last updated: Fri 27 Nov 2026, 11:30 PKT.
+Last updated: Fri 27 Nov 2026, 13:00 PKT.
 
 - **Deadline:** submissions close Mon 30 Nov 2026 at 2:00 PM PKT. Aim to submit by 10:00 AM. The app must stay live until winners are announced in mid-December.
 - **Live:** https://spec-interrogator.vercel.app, deployed from `main` by Vercel (project `spec-interrogator`). Every push to `main` redeploys. A changed environment variable needs a redeploy to take effect.
 - **Repo:** `syedmuhdahmad/spec-interrogator`, public. CI (GitHub Actions) runs the secret scan, lint, type-check, tests and build on every push.
-- **Phase 1 (Foundation) is done.** The whole pipeline works on the live site with the real models. 75 tests pass.
-- **Phase 2 (Live tuning) has started.** Only one of the four samples (CASE 01, wallet top-up) has been run live. The other three have never been run against the real models.
+- **Phase 1 (Foundation) is done.** The whole pipeline works on the live site with the real models. 102 tests pass.
+- **Phase 2 (Live tuning) is under way.** Only one of the four samples (CASE 01, wallet top-up) has been run live. The other three have never been run against the real models.
+- **Six weaknesses from a second real run are fixed and pushed, but unconfirmed.** See the 27 Nov commits "Show why a reply was rejected when the retry succeeds", "Keep Scenario Outline examples in the Jira and Playwright exports" and "Stop the suite assuming answers to open questions". The code parts (tag handling, exports, retry reason) are tested. The prompt parts can only be confirmed by a live run on the deployed site.
 - **No recorded replays exist yet.** `public/replays/` is empty, so `DEMO_MODE=replay` has nothing to show.
 
 ## Facts worth knowing
@@ -58,6 +59,9 @@ Per-agent tokens in the tuned run: Planner 773, Analyst 1,338, Ambiguity Hunter 
 - **The per-IP limit is loose on purpose** (6 runs per 10 minutes). Judges may share one office address.
 - **The history tool uses a two-turn JSON pattern, not native function calling.** Nobody has confirmed that the gateway passes tool calls through, and this works either way.
 - **No database.** Nothing a visitor pastes is stored.
+- **Code owns the `@needs-clarification` tag.** `lib/tools/clarification.ts` strips it wherever the model wrote it and puts it on every scenario that contains a `<TBD` placeholder. The models are told not to write it.
+- **The Test Designer and the Risk Ranker are given the open questions** (term and question only, at most eight). Without them the suite asserted answers to things the Ambiguity Hunter had listed as undecided. The Skeptic is not given them yet: one change at a time.
+- **A tag line that follows a step is not rejected by the Validator.** A model that leaves no blank line between scenarios would trip that check on every scenario. Code owning the tag fixes the case that was seen.
 
 ## Lessons learned
 
@@ -70,6 +74,13 @@ Per-agent tokens in the tuned run: Planner 773, Analyst 1,338, Ambiguity Hunter 
 - **To call `/api/run` with a script, send an `Origin` header that matches the host.** Without it the answer is 403.
 - **The local rate limiter is shared by everything on `localhost`** (the key is "unknown"). After six runs in ten minutes the server answers 429. Restart it to reset.
 - **The Vercel project only lists repositories owned by the GitHub user connected to that Vercel account.**
+- **A Gherkin tag line written after a scenario's last step belongs to the next scenario, and the file still parses.** After the very last scenario it does not parse at all. Never trust a model with where a tag goes.
+- **The Log tab has no output text.** To review a run, ask the owner for the Log tab, the downloaded test plan (it holds the client questions in full) and the `.feature` file.
+- **When a retry succeeds, the reason is now on the timeline** ("Needed one retry: ..."). Before 27 Nov it was only in the server log.
+- **Check the commit author before committing.** This machine's default git identity is not the address this repository's history uses. `git log -1 --format=%ae` should end in `users.noreply.github.com`. Five commits had to be re-authored before a push because of this.
+- **Prompt changes cannot be proven offline.** The scripted-model tests prove what a prompt contains and what the code does with a reply, not that the real models comply.
+- **Check escapes after an edit.** An editing tool once turned the escape sequences for U+2028 and U+2029 in a regular expression into the raw characters, which broke the pattern.
+- **Two `pipeline-builder` agents can work at once** if each is given its own list of files and told not to touch the other's.
 
 ## Open risks
 
@@ -77,21 +88,35 @@ Per-agent tokens in the tuned run: Planner 773, Analyst 1,338, Ambiguity Hunter 
 2. **No replay fallback yet.** See issue #13.
 3. **Cancellation on Vercel is untested.** `vercel.json` sets `supportsCancellation` for the run route as Vercel's docs describe, but nobody has confirmed on the live site that pressing Stop ends the model calls.
 4. **Three samples are untested live.** The GitHub sample (`microsoft/playwright` issue 30976) was picked from a search listing and has never been fetched by the app.
-5. **No loop appears when the first draft passes.** That is correct, but judges then do not see the Validator send work back. Consider whether a sample should reliably show one.
+5. **No loop appears when the first draft passes.** That is correct, but judges then do not see the Validator send work back. Consider whether a sample should reliably show one. The owner has not decided.
+6. **More placeholder steps, unknown effect.** The suite will now hold more `<TBD: ...>` Then steps. Nobody has seen how that reads to a judge, or whether the Skeptic then asks for more revisions.
+7. **"Addressed in the revision" is not verified.** The chip and the test plan heading appear when a revised suite passes the parser and the coverage check. Nothing checks that the Skeptic's objections were really fixed.
+8. **No code checks that a Then step is observable.** "Then it works" passes the Validator; only the Skeptic can catch it.
+9. **Jira import is untested.** The Examples table header is written as an ordinary row, and nobody has imported the CSV into Jira.
 
 ## Next steps
 
 In order. Each has a GitHub issue under its milestone.
 
-1. Run CASE 02, CASE 03 and the GitHub sample live, read the output as a QA lead would, and tune prompts (#9, #11, #12). Each run costs about $0.10 to $0.15. Ask the owner before spending.
-2. Compare the on-screen cost estimate with real LiteLLM spend and set `PRICE_MAIN` / `PRICE_FAST` if needed (#10).
-3. Add `GITHUB_TOKEN` (fine-grained, public repositories, read-only) on Vercel and redeploy (#12). The owner does this.
-4. Confirm on the live site that Stop cancels a run.
-5. Record replays with `npm run record` and commit `public/replays/` (#13). Ask first: it costs about four runs.
-6. Phase 3: accessibility pass, browsers and a phone, README with live screenshots (#14, #15, #16).
-7. Phase 4: run the `hackathon-guard` agent, then submit (#18, #19, #20).
+1. Run CASE 02, CASE 03 and the GitHub sample live, read the output as a QA lead would, and tune prompts (#9, #11, #12). Check first that the prompt fixes held: no step assumes an answer to an open question, each question covers one decision, the Analyst keeps the stated actor. Each run costs about $0.10 to $0.15. The owner runs them and pastes the output. Ask before spending.
+2. Decide with the owner whether a sample should reliably show a feedback loop. Give options and a recommendation; do not fake a loop.
+3. Compare the on-screen cost estimate with real LiteLLM spend and set `PRICE_MAIN` / `PRICE_FAST` if needed (#10).
+4. Add `GITHUB_TOKEN` (fine-grained, public repositories, read-only) on Vercel and redeploy (#12). The owner does this.
+5. Confirm on the live site that Stop cancels a run. Tell the owner how it will be checked before doing it.
+6. Record replays with `npm run record` and commit `public/replays/` (#13). Ask first: it costs about four runs.
+7. Phase 3: accessibility pass, browsers and a phone, README with live screenshots (#14, #15, #16).
+8. Phase 4: run the `hackathon-guard` agent, then submit (#18, #19, #20).
 
 ## Session log
+
+### Fri 27 Nov 2026 (Claude Code on the owner's machine, midday)
+
+- `npm run verify` passed on arrival. Read every agent prompt, the orchestrator and the tests before changing anything.
+- Reviewed a second real run from its exported files. It was on a story that is not one of the samples, so the tests for what it showed use made-up wallet text. Only public or made-up text goes into this repository, its tests and its issues.
+- That run was strong on questions and coverage, and the Skeptic behaved well. It showed six weaknesses: the suite assumed answers to open questions, a `@needs-clarification` tag landed on the wrong scenario, Scenario Outlines lost their Examples in the exports, the Analyst changed who acts, questions bundled several decisions, and one Risk Ranker reason cited an unrelated question.
+- Fixed all six with tests (75 to 102). See "Decisions" and "Lessons learned" above. The prompt parts are unconfirmed until a live run.
+- The `hackathon-guard` audit passed every rule check and blocked the push over the commit author address. The commits were re-authored, then pushed.
+- CASE 02, CASE 03 and the GitHub sample are still not run live. The loop decision and the Stop check have not been started.
 
 ### Fri 27 Nov 2026 (cloud session, morning)
 

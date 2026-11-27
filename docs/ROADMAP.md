@@ -18,12 +18,12 @@ Submissions close Monday 30 November 2026 at 2:00 PM PKT. Each phase is a GitHub
 - [x] Streaming API route with rate limits and request checks
 - [x] UI: samples, live timeline, results tabs, downloads
 - [x] 75 tests, secret scanner, CI
-- [ ] Vercel project connected, environment variables set
-- [ ] First live run against the real models
+- [x] Vercel project connected, environment variables set
+- [x] First live run against the real models
 
 ## Phase 2: Live tuning
 
-- [ ] Confirm model names with the gateway's `/models` endpoint
+- [x] Confirm model names with the gateway's `/models` endpoint
 - [ ] Run the three made-up samples live; fix whatever the real model does differently from the mock
 - [ ] Tune prompts for specificity (questions that quote the text, assertions that check something)
 - [ ] Measure tokens, cost and time per run; adjust `maxTokens` and `LIMITS`
