@@ -11,7 +11,7 @@ Rules:
 - Each case must be specific to this requirement, not a generic checklist line.
 - "relatedAC": the id of the acceptance criterion it stresses (for example "AC-2").
 - "title": at most 12 words.
-- "expected": what the system should do, in one sentence of at most 25 words. If the requirement does not say, write "Not specified: needs a decision" and nothing more.
+- "expected": what the system should do, in one sentence of at most 25 words. Give an outcome only when the requirement states it or it follows directly from a stated rule. Do not invent recovery behaviour (a retry, a rollback, a block, a message) that the requirement does not mention. If the requirement does not say, write "Not specified: needs a decision" and nothing more.
 - "severity": high when a failure would lose data, money or access, or block the main flow.
 - Between 4 and 8 cases, highest severity first.`,
   `${JSON_ONLY}

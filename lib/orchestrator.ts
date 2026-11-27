@@ -27,6 +27,7 @@ import type {
 } from "@/lib/core/types";
 import type { LlmClient } from "@/lib/llm/types";
 import { UsageMeter } from "@/lib/llm/usage";
+import { markClarifications } from "@/lib/tools/clarification";
 import { checkCoverage, describeValidation } from "@/lib/tools/coverage";
 import { buildExports } from "@/lib/tools/exporters";
 import { applyPriorityTags, parseGherkin, type ParsedFeature } from "@/lib/tools/gherkin";
@@ -136,7 +137,7 @@ export async function runPipeline(
     if (history) emit({ type: "artifact", key: "history", data: history });
 
     // 5. Test Designer <-> Validator
-    const brief: DesignBrief = { story, plan, criteria, edgeCases, history };
+    const brief: DesignBrief = { story, plan, criteria, edgeCases, ambiguities, history };
     let designRound = 0;
     let validateRound = 0;
     let fixRounds = 0;
@@ -147,7 +148,8 @@ export async function runPipeline(
     };
     const validate = (feature: string): Draft => {
       validateRound += 1;
-      return validateDraft(feature, criteria, edgeCases, emit, now, validateRound);
+      // Code owns the @needs-clarification tag, so every draft is normalised before it is checked or shown.
+      return validateDraft(markClarifications(feature), criteria, edgeCases, emit, now, validateRound);
     };
     /** Sends a failing draft back to the Test Designer until it passes or the cap is reached. */
     const fixUntilValid = async (draft: Draft): Promise<Draft> => {

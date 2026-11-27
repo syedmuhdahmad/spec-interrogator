@@ -1,4 +1,5 @@
-import type { Criterion, EdgeCase, HistoryReport, Plan, ReviewIssue, StoryDoc, ValidationReport } from "@/lib/core/types";
+import type { Ambiguity, Criterion, EdgeCase, HistoryReport, Plan, ReviewIssue, StoryDoc, ValidationReport } from "@/lib/core/types";
+import { formatAmbiguities } from "./ambiguity";
 import { formatCriteria } from "./analyst";
 import { runFencedAgent, systemPrompt, untrusted, type AgentContext } from "./base";
 import { formatEdgeCases } from "./edgecases";
@@ -12,14 +13,16 @@ Rules:
 - One Feature. Between 6 and 10 scenarios. Keep the file under 110 lines: a longer file is cut off and rejected.
 - One scenario may verify several criteria when a single flow shows them all: tag it with each one.
 - At most 6 steps per scenario and at most 4 rows in an Examples table.
-- Tag every scenario with the acceptance criteria it verifies (@AC-1) and any edge case it covers (@EC-2). Tags go on the line directly above the scenario.
+- Tag every scenario with the acceptance criteria it verifies (@AC-1) and any edge case it covers (@EC-2). Tags go on the line directly above the scenario and nowhere else.
 - Every acceptance criterion must have at least one scenario. Every edge case marked [high] must have one.
 - Use only AC and EC ids from the lists you are given.
 - Every scenario needs a When step (one action) and a Then step. A Then step must assert something a tester can observe: a message, a value, a saved state. Never "it works" or "it is handled correctly".
 - Include negative scenarios: for the main flows, show what happens when the action fails or is refused, and what state is left behind.
 - Use a Scenario Outline with an Examples table for boundary values.
-- Do not invent business rules. Where the requirement leaves a value undefined, write the step with a placeholder such as "<TBD: maximum amount>" and add the tag @needs-clarification.
-- A criterion that is vague or about quality ("fast", "secure") still needs its own scenario: write it with <TBD: ...> placeholders and @needs-clarification rather than leaving it out.
+- Do not invent business rules. Where the requirement leaves a value or an outcome undefined, write the step with a placeholder such as "<TBD: maximum amount>" or "<TBD: what the customer is told>". Code tags every scenario that contains a placeholder, so do not write @needs-clarification yourself.
+- The open questions you are given are undecided. Never write a step that assumes an answer to one: use a <TBD: ...> placeholder in that step instead.
+- An edge case whose expected result is "Not specified: needs a decision" gets a Then step with a <TBD: ...> placeholder.
+- A criterion that is vague or about quality ("fast", "secure") still needs its own scenario: write it with <TBD: ...> placeholders rather than leaving it out.
 - Do not add priority tags: another agent assigns priorities.
 - Plain, concrete steps in business language. No UI selectors.`,
   REPLY_FORMAT,
@@ -30,6 +33,8 @@ export interface DesignBrief {
   plan: Plan;
   criteria: Criterion[];
   edgeCases: EdgeCase[];
+  /** Questions nobody has answered yet: the suite must not assume an answer to any of them. */
+  ambiguities: Ambiguity[];
   history?: HistoryReport;
 }
 
@@ -49,6 +54,9 @@ function briefText(brief: DesignBrief): string {
     `Acceptance criteria:\n${formatCriteria(brief.criteria)}`,
   ];
   if (brief.edgeCases.length) parts.push(`Edge cases:\n${formatEdgeCases(brief.edgeCases)}`);
+  if (brief.ambiguities.length) {
+    parts.push(`Open questions for the client (undecided):\n${formatAmbiguities(brief.ambiguities)}`);
+  }
   if (brief.history?.lessons.length) {
     parts.push(`Lessons from past bugs in this repository:\n${brief.history.lessons.map((l) => `- ${l.lesson}`).join("\n")}`);
   }
@@ -88,7 +96,7 @@ function taskText(task: DesignTask, criteria: Criterion[]): string {
   return [
     previous,
     `The reviewer raised these problems:\n${task.issues.map((issue) => `- [${issue.severity}] "${issue.scenario}": ${issue.problem} Fix: ${issue.fix}`).join("\n")}`,
-    "Address each problem and keep all existing coverage and tags. Send the complete revised file.",
+    "Address each problem and keep all existing coverage and tags. Keep every <TBD: ...> placeholder: do not replace one with a guessed value. Send the complete revised file.",
   ].join("\n\n");
 }
 

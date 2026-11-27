@@ -1,5 +1,6 @@
 import { rankingSchema } from "@/lib/core/schemas";
 import type { Ambiguity, HistoryReport, Plan, Priority, RankedScenario, ScenarioInfo } from "@/lib/core/types";
+import { formatAmbiguities } from "./ambiguity";
 import { JSON_ONLY, runJsonAgent, type AgentContext } from "./base";
 
 const SYSTEM = [
@@ -8,6 +9,8 @@ const SYSTEM = [
 Rules:
 - P1: a failure blocks the main flow, or loses data, money or access. P2: important behaviour with a workaround. P3: polish and rare cases.
 - Raise the priority of scenarios in areas where past bugs were found, and of scenarios that depend on an unanswered question (they are the likeliest to be built wrong).
+- A scenario tagged @needs-clarification contains a value or outcome nobody has decided yet.
+- Mention an open question in a reason only when that scenario tests the thing the question is about.
 - Not everything is P1: at most about a third of the scenarios.
 - Rank every scenario id you are given, once.
 - "reason": one sentence of at most 15 words, specific to that scenario.`,
@@ -31,7 +34,7 @@ export async function runRiskRanker(
     `Scenarios:\n${listing}`,
   ];
   if (ambiguities.length) {
-    context_.push(`Open questions for the client:\n${ambiguities.map((a) => `- [${a.severity}] ${a.term}`).join("\n")}`);
+    context_.push(`Open questions for the client:\n${formatAmbiguities(ambiguities)}`);
   }
   if (history?.lessons.length) {
     context_.push(`Past bugs in this repository:\n${history.lessons.map((l) => `- ${l.lesson}`).join("\n")}`);

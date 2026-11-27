@@ -166,6 +166,195 @@ describe("runPipeline", () => {
     expect(last).toMatchObject({ type: "run_done", partial: false });
   });
 
+  it("shows the Test Designer and the Risk Ranker the open questions, as questions and not only as terms", async () => {
+    const question = "Above what amount is extra verification required: a fixed limit, or a limit per customer?";
+    const llm = new ScriptedLlm((request) =>
+      request.agent === "ambiguity"
+        ? JSON.stringify({
+            ambiguities: [
+              { term: "Missing: currency", quote: "", whyItMatters: "Amounts cannot be compared.", question: "Which currencies can a wallet hold?", severity: "low" },
+              { term: "Large amounts", quote: "Large amounts may need extra verification", whyItMatters: "The threshold decides which top-ups are held.", question, severity: "high" },
+            ],
+          })
+        : undefined,
+    );
+    const { artifacts, last } = await run(STORY, llm);
+    expect(last).toMatchObject({ type: "run_done" });
+    expect(artifacts.ambiguities?.map((item) => item.question)).toContain(question);
+
+    const firstAsk = (agent: string) => llm.calls.filter((call) => call.agent === agent)[0].messages[0].content;
+
+    // Most severe first, one line each, and never the quote: that is the requirement's own text.
+    expect(firstAsk("designer")).toContain(
+      `Open questions for the client (undecided):\n- [high] Large amounts: ${question}\n- [low] Missing: currency: Which currencies can a wallet hold?`,
+    );
+    expect(firstAsk("ranker")).toContain(`Open questions for the client:\n- [high] Large amounts: ${question}\n`);
+
+    // Every later round is given the same brief, so a fix or a revision cannot forget the questions.
+    const designerAsks = llm.calls.filter((call) => call.agent === "designer");
+    expect(designerAsks.length).toBeGreaterThan(1);
+    for (const ask of designerAsks) expect(ask.messages[0].content).toContain(question);
+  });
+
+  it("lists at most eight open questions for the Test Designer, and none when there are none", async () => {
+    const many = Array.from({ length: 10 }, (_, index) => ({
+      term: `term ${index + 1}`,
+      quote: "",
+      whyItMatters: "It changes the build.",
+      question: `Made-up question number ${index + 1}?`,
+      severity: "medium",
+    }));
+    const pass = '{"verdict":"pass","issues":[],"strengths":[]}';
+    const crowded = new ScriptedLlm((request) =>
+      request.agent === "ambiguity" ? JSON.stringify({ ambiguities: many }) : request.agent === "skeptic" ? pass : undefined,
+    );
+    await run(STORY, crowded);
+    const crowdedAsk = crowded.calls.filter((call) => call.agent === "designer")[0].messages[0].content;
+    expect(crowdedAsk.match(/Made-up question number/g)).toHaveLength(8);
+
+    const empty = new ScriptedLlm((request) =>
+      request.agent === "ambiguity" ? '{"ambiguities": []}' : request.agent === "skeptic" ? pass : undefined,
+    );
+    await run(STORY, empty);
+    expect(empty.calls.filter((call) => call.agent === "designer")[0].messages[0].content).not.toContain("Open questions for the client");
+    expect(empty.calls.filter((call) => call.agent === "ranker")[0].messages[0].content).not.toContain("Open questions for the client");
+  });
+
+  it("tags the scenarios that hold a placeholder with @needs-clarification, wherever the model wrote the tag", async () => {
+    const tag = "@needs-clarification";
+    const scripted = [
+      "Feature: Wallet top-up",
+      "",
+      "  @AC-1 @AC-4 @EC-1",
+      "  Scenario: Large top-up asks for extra verification",
+      "    Given a customer with a saved debit card",
+      "    When the customer tops up <TBD: amount that needs extra verification>",
+      "    Then extra verification is requested before the wallet is credited",
+      `  ${tag}`,
+      "",
+      "  @AC-2 @EC-3",
+      "  Scenario: Successful top-up is credited once",
+      "    When the customer tops up 20.00 twice in quick succession",
+      "    Then the wallet balance increases by 20.00 only once",
+      "",
+      "  @AC-3",
+      "  Scenario Outline: Failed payment shows an error",
+      "    When the card is refused because of <reason>",
+      '    Then the customer sees "<message>"',
+      "",
+      "    Examples:",
+      "      | reason             | message                         |",
+      "      | insufficient funds | <TBD: what the customer is told> |",
+      "",
+      `  @AC-2 ${tag}`,
+      "  Scenario: Top-up with an empty amount is refused",
+      "    When the customer submits a top-up with no amount",
+      '    Then the message "Enter an amount" is shown',
+    ].join("\n");
+    // What went wrong in a real run: the file parses, and the tag sits on the scenario below the one it was meant for.
+    const before = parseGherkin(scripted);
+    expect(before.ok).toBe(true);
+    expect(before.scenarios.map((scenario) => scenario.tags.includes(tag))).toEqual([false, true, false, true]);
+
+    const llm = new ScriptedLlm((request) => {
+      if (request.agent === "designer") return "```gherkin\n" + scripted + "\n```";
+      if (request.agent === "skeptic") return '{"verdict":"pass","issues":[],"strengths":[]}';
+      return undefined;
+    });
+    const { events, artifacts, last } = await run(STORY, llm);
+
+    // The first draft passed as written: no fix round and no revision changed it.
+    expect(llm.count("designer")).toBe(1);
+    expect(ofType(events, "loop")).toHaveLength(0);
+    expect(artifacts.validation).toMatchObject({ ok: true, stats: { scenarios: 4, acCovered: 4, acTotal: 4 } });
+    expect(last).toMatchObject({ type: "run_done", partial: false });
+
+    const featureArtifacts = events.flatMap((event) => (event.type === "artifact" && event.key === "feature" ? [event.data] : []));
+    expect(featureArtifacts.length).toBeGreaterThanOrEqual(2);
+    // Every version shown, from the Validator's to the Reporter's, is already normalised.
+    for (const feature of featureArtifacts) {
+      const parsed = parseGherkin(feature);
+      expect(parsed.ok).toBe(true);
+      expect(parsed.scenarios.map((scenario) => [scenario.name, scenario.tags.includes(tag)])).toEqual([
+        ["Large top-up asks for extra verification", true],
+        ["Successful top-up is credited once", false],
+        ["Failed payment shows an error", true],
+        ["Top-up with an empty amount is refused", false],
+      ]);
+      expect(parsed.scenarios.map((scenario) => scenario.tags.filter((name) => /^@(AC|EC)-\d+$/.test(name)))).toEqual([
+        ["@AC-1", "@AC-4", "@EC-1"],
+        ["@AC-2", "@EC-3"],
+        ["@AC-3"],
+        ["@AC-2"],
+      ]);
+      expect(feature.match(/@needs-clarification/g)).toHaveLength(2);
+    }
+
+    // The Risk Ranker is told which scenarios hold an undecided value.
+    const ranking = llm.calls.filter((call) => call.agent === "ranker")[0].messages[0].content;
+    expect(ranking).toContain(`S1: Large top-up asks for extra verification @AC-1 @AC-4 @EC-1 ${tag}`);
+    expect(ranking).toContain("S2: Successful top-up is credited once @AC-2 @EC-3\n");
+    expect(artifacts.ranking?.find((item) => item.id === "S3")?.tags).toContain(tag);
+  });
+
+  it("tells the Skeptic that placeholders are deliberate, and the Test Designer to keep them in a revision", async () => {
+    const draft = [
+      "Feature: Wallet top-up",
+      "",
+      "  @AC-1 @AC-2 @EC-1",
+      "  Scenario: Successful top-up",
+      "    When the customer tops up 20.00",
+      "    Then the wallet balance increases by 20.00",
+      "",
+      "  @AC-3 @EC-3",
+      "  Scenario: Failed payment",
+      "    When the card is declined",
+      "    Then the customer sees <TBD: what the customer is told>",
+      "",
+      "  @AC-4",
+      "  Scenario: Large amount asks for extra verification",
+      "    When the customer tops up <TBD: amount that needs extra verification>",
+      "    Then extra verification is requested",
+    ].join("\n");
+    const revised = `${draft}\n\n  @AC-3\n  Scenario: Failed payment leaves the balance unchanged\n    When the card is declined\n    Then the wallet balance is unchanged`;
+    const review = {
+      verdict: "revise",
+      issues: [
+        {
+          scenario: "Failed payment",
+          problem: "Nothing checks the wallet balance after a declined card.",
+          fix: "Add a scenario asserting the balance is unchanged.",
+          severity: "major",
+        },
+      ],
+      strengths: [],
+    };
+    const llm = new ScriptedLlm((request, callNumber) => {
+      if (request.agent === "designer") return "```gherkin\n" + (callNumber === 1 ? draft : revised) + "\n```";
+      if (request.agent === "skeptic") return JSON.stringify(review);
+      return undefined;
+    });
+    const { events, artifacts, last } = await run(STORY, llm);
+
+    const skepticCall = llm.calls.filter((call) => call.agent === "skeptic")[0];
+    expect(skepticCall.system).toContain("A step that contains a <TBD: ...> placeholder is deliberate");
+    expect(skepticCall.system).toContain("never suggest replacing it with a guessed value");
+
+    const designerCalls = llm.calls.filter((call) => call.agent === "designer");
+    expect(designerCalls).toHaveLength(2);
+    expect(designerCalls[0].messages[0].content).not.toContain("Keep every <TBD: ...> placeholder");
+    const revision = designerCalls[1].messages[0].content;
+    expect(revision).toContain("Nothing checks the wallet balance after a declined card.");
+    expect(revision).toContain("Keep every <TBD: ...> placeholder: do not replace one with a guessed value.");
+
+    expect(ofType(events, "loop").map((loop) => `${loop.from}->${loop.to}`)).toEqual(["skeptic->designer"]);
+    expect(artifacts.review).toMatchObject({ verdict: "revise", addressed: true });
+    expect(artifacts.feature).toContain("<TBD: what the customer is told>");
+    expect(artifacts.feature).toContain("<TBD: amount that needs extra verification>");
+    expect(artifacts.feature).toContain("Scenario: Failed payment leaves the balance unchanged");
+    expect(last).toMatchObject({ type: "run_done", partial: false });
+  });
+
   it("rejects a feature file that was cut off at the token limit and asks for a shorter one", async () => {
     const cutOff = { text: "```gherkin\nFeature: X\n  @AC-1\n  Scenario: Fine so far\n    When a\n    Then b\n\n  @AC-2", truncated: true };
     const llm = new ScriptedLlm((request, callNumber) => (request.agent === "designer" && callNumber === 1 ? cutOff : undefined));
