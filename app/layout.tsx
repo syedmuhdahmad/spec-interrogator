@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import type { ReactNode } from "react";
 // Fonts are bundled with the app (no request to a third-party font host).
 import "@fontsource/press-start-2p/latin-400.css";
 import "@fontsource/silkscreen/latin-400.css";
@@ -25,7 +26,7 @@ export const viewport: Viewport = {
   colorScheme: "dark",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body className="min-h-dvh antialiased">
