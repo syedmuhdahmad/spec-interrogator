@@ -355,6 +355,137 @@ describe("runPipeline", () => {
     expect(last).toMatchObject({ type: "run_done", partial: false });
   });
 
+  // A sound suite whose last scenario tests an open question (how fast is "fast") with a placeholder.
+  const timedDraft = [
+    "Feature: Wallet top-up",
+    "",
+    "  @AC-1 @AC-2 @EC-1",
+    "  Scenario: Successful top-up",
+    "    When the customer tops up 20.00",
+    "    Then the wallet balance increases by 20.00",
+    "",
+    "  @AC-3 @EC-3",
+    "  Scenario: Failed payment",
+    "    When the card is declined",
+    "    Then an error is shown",
+    "",
+    "  @AC-4",
+    "  Scenario: Large amount asks for extra verification",
+    "    When the customer tops up <TBD: amount that needs extra verification>",
+    "    Then extra verification is requested",
+    "",
+    "  @AC-2",
+    "  Scenario: Confirmation is shown within the accepted time",
+    "    When the customer tops up 20.00",
+    "    Then the confirmation is shown within <TBD: maximum time in seconds>",
+  ].join("\n");
+  const timingQuestion = "What is the longest acceptable time from confirming a top-up to seeing the confirmation?";
+  const timingAmbiguities = [
+    { term: "Missing: currency", quote: "", whyItMatters: "Amounts cannot be compared.", question: "Which currencies can a wallet hold?", severity: "low" },
+    { term: "fast", quote: "Top-ups should be fast and secure", whyItMatters: "Nobody can test an unmeasured speed.", question: timingQuestion, severity: "high" },
+  ];
+  const passingReview = '{"verdict":"pass","issues":[],"strengths":[]}';
+
+  it("shows the Skeptic the open questions, and tells it a placeholder scenario for one is not an invented rule", async () => {
+    const scripted = (ambiguities: unknown[]) =>
+      new ScriptedLlm((request) => {
+        if (request.agent === "ambiguity") return JSON.stringify({ ambiguities });
+        if (request.agent === "designer") return "```gherkin\n" + timedDraft + "\n```";
+        if (request.agent === "skeptic") return passingReview;
+        return undefined;
+      });
+    const skepticCall = (llm: ScriptedLlm) => llm.calls.filter((call) => call.agent === "skeptic")[0];
+
+    const llm = scripted(timingAmbiguities);
+    const { events, artifacts, last } = await run(STORY, llm);
+    expect(last).toMatchObject({ type: "run_done", partial: false });
+    expect(llm.count("skeptic")).toBe(1);
+
+    expect(skepticCall(llm).system).toContain(
+      "The open questions you are given are undecided. A scenario that tests one of them and holds a <TBD: ...> placeholder is deliberate: do not report it as an invented rule and do not ask for it to be dropped.",
+    );
+
+    // Most severe first, term and question only, between the edge cases and the file under review.
+    const ask = skepticCall(llm).messages[0].content;
+    expect(ask).toContain(
+      `Open questions for the client (undecided):\n- [high] fast: ${timingQuestion}\n- [low] Missing: currency: Which currencies can a wallet hold?\n\nFeature file under review:`,
+    );
+    expect(ask).not.toContain("Nobody can test an unmeasured speed.");
+    expect(ask.indexOf("Acceptance criteria:")).toBeLessThan(ask.indexOf("Open questions for the client"));
+
+    // The scenario for the open question is still in the suite the Reporter builds.
+    expect(ofType(events, "loop")).toHaveLength(0);
+    expect(artifacts.feature).toContain("Scenario: Confirmation is shown within the accepted time");
+    expect(artifacts.feature).toContain("<TBD: maximum time in seconds>");
+
+    // The list is capped like the Test Designer's.
+    const many = Array.from({ length: 10 }, (_, index) => ({
+      term: `term ${index + 1}`,
+      quote: "",
+      whyItMatters: "It changes the build.",
+      question: `Made-up question number ${index + 1}?`,
+      severity: "medium",
+    }));
+    const crowded = scripted(many);
+    await run(STORY, crowded);
+    expect(skepticCall(crowded).messages[0].content.match(/Made-up question number/g)).toHaveLength(8);
+
+    // With nothing undecided there is no heading at all.
+    const empty = scripted([]);
+    await run(STORY, empty);
+    expect(skepticCall(empty).messages[0].content).not.toContain("Open questions for the client");
+    expect(skepticCall(empty).messages[0].content).toContain("Feature file under review:");
+  });
+
+  it("tells the Test Designer to keep placeholders narrow and Then steps observable, and to keep a placeholder scenario in a revision", async () => {
+    const revised = `${timedDraft}\n\n  @AC-3\n  Scenario: Failed payment leaves the balance unchanged\n    When the card is declined\n    Then the wallet balance is unchanged`;
+    const review = {
+      verdict: "revise",
+      issues: [
+        {
+          scenario: "Failed payment",
+          problem: "Nothing checks the wallet balance after a declined card.",
+          fix: "Add a scenario asserting the balance is unchanged.",
+          severity: "major",
+        },
+      ],
+      strengths: [],
+    };
+    const llm = new ScriptedLlm((request, callNumber) => {
+      if (request.agent === "ambiguity") return JSON.stringify({ ambiguities: timingAmbiguities });
+      if (request.agent === "designer") return "```gherkin\n" + (callNumber === 1 ? timedDraft : revised) + "\n```";
+      if (request.agent === "skeptic") return JSON.stringify(review);
+      return undefined;
+    });
+    const { events, artifacts, last } = await run(STORY, llm);
+
+    const designerCalls = llm.calls.filter((call) => call.agent === "designer");
+    expect(designerCalls).toHaveLength(2);
+    // The rules are in the system prompt on every round, the first draft and the revision alike.
+    for (const call of designerCalls) {
+      expect(call.system).toContain(
+        "A placeholder stands for the undecided part only. Where the requirement states part of an outcome, assert that part plainly and use a placeholder for the rest. Do not write a scenario whose Then steps are all placeholders unless nothing about its outcome is stated.",
+      );
+      expect(call.system).toContain(
+        "A Then step says what a tester can see or measure. Never write how the system is built (a lock, a key, an internal mechanism) as a Then step.",
+      );
+      // The earlier rule stays: narrower placeholders, not fewer honest ones.
+      expect(call.system).toContain("Never write a step that assumes an answer to one: use a <TBD: ...> placeholder in that step instead.");
+    }
+
+    const keepScenario = "A scenario that holds a placeholder for an open question is kept too: do not drop it.";
+    expect(designerCalls[0].messages[0].content).not.toContain(keepScenario);
+    expect(designerCalls[1].messages[0].content).toContain(
+      `Keep every <TBD: ...> placeholder: do not replace one with a guessed value. ${keepScenario} Send the complete revised file.`,
+    );
+    expect(designerCalls[1].messages[0].content).toContain(timingQuestion);
+
+    expect(ofType(events, "loop").map((loop) => `${loop.from}->${loop.to}`)).toEqual(["skeptic->designer"]);
+    expect(artifacts.review).toMatchObject({ verdict: "revise", addressed: true });
+    expect(artifacts.feature).toContain("Scenario: Confirmation is shown within the accepted time");
+    expect(last).toMatchObject({ type: "run_done", partial: false });
+  });
+
   it("rejects a feature file that was cut off at the token limit and asks for a shorter one", async () => {
     const cutOff = { text: "```gherkin\nFeature: X\n  @AC-1\n  Scenario: Fine so far\n    When a\n    Then b\n\n  @AC-2", truncated: true };
     const llm = new ScriptedLlm((request, callNumber) => (request.agent === "designer" && callNumber === 1 ? cutOff : undefined));

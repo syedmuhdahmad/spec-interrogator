@@ -187,7 +187,7 @@ export async function runPipeline(
       notes.push("The suite did not pass every automated check. The gaps are listed in the test plan.");
     } else if (hasTimeFor("skeptic", "The Skeptic's review")) {
       try {
-        review = await runSkeptic(context, draft.feature, criteria, edgeCases);
+        review = await runSkeptic(context, draft.feature, criteria, edgeCases, ambiguities);
         emit({ type: "artifact", key: "review", data: review });
       } catch (error) {
         carryOnAfter(error, "The Skeptic's review failed and was skipped.");

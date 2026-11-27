@@ -23,6 +23,8 @@ Rules:
 - The open questions you are given are undecided. Never write a step that assumes an answer to one: use a <TBD: ...> placeholder in that step instead.
 - An edge case whose expected result is "Not specified: needs a decision" gets a Then step with a <TBD: ...> placeholder.
 - A criterion that is vague or about quality ("fast", "secure") still needs its own scenario: write it with <TBD: ...> placeholders rather than leaving it out.
+- A placeholder stands for the undecided part only. Where the requirement states part of an outcome, assert that part plainly and use a placeholder for the rest. Do not write a scenario whose Then steps are all placeholders unless nothing about its outcome is stated.
+- A Then step says what a tester can see or measure. Never write how the system is built (a lock, a key, an internal mechanism) as a Then step.
 - Do not add priority tags: another agent assigns priorities.
 - Plain, concrete steps in business language. No UI selectors.`,
   REPLY_FORMAT,
@@ -96,7 +98,7 @@ function taskText(task: DesignTask, criteria: Criterion[]): string {
   return [
     previous,
     `The reviewer raised these problems:\n${task.issues.map((issue) => `- [${issue.severity}] "${issue.scenario}": ${issue.problem} Fix: ${issue.fix}`).join("\n")}`,
-    "Address each problem and keep all existing coverage and tags. Keep every <TBD: ...> placeholder: do not replace one with a guessed value. Send the complete revised file.",
+    "Address each problem and keep all existing coverage and tags. Keep every <TBD: ...> placeholder: do not replace one with a guessed value. A scenario that holds a placeholder for an open question is kept too: do not drop it. Send the complete revised file.",
   ].join("\n\n");
 }
 
