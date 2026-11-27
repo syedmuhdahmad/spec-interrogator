@@ -3,11 +3,15 @@ import { formatCriteria } from "./analyst";
 import { runFencedAgent, systemPrompt, untrusted, type AgentContext } from "./base";
 import { formatEdgeCases } from "./edgecases";
 
+const REPLY_FORMAT = "Reply with the complete feature file in one ```gherkin code block and nothing else.";
+
 const SYSTEM = systemPrompt(
   "Test Designer",
   `Write a Gherkin feature file that tests the requirement. Automated checks will parse your file and verify coverage, and a reviewer will then attack it, so follow the rules exactly.
 Rules:
-- One Feature. Between 6 and 12 scenarios. Keep the file under 130 lines.
+- One Feature. Between 6 and 10 scenarios. Keep the file under 110 lines: a longer file is cut off and rejected.
+- One scenario may verify several criteria when a single flow shows them all: tag it with each one.
+- At most 6 steps per scenario and at most 4 rows in an Examples table.
 - Tag every scenario with the acceptance criteria it verifies (@AC-1) and any edge case it covers (@EC-2). Tags go on the line directly above the scenario.
 - Every acceptance criterion must have at least one scenario. Every edge case marked [high] must have one.
 - Use only AC and EC ids from the lists you are given.
@@ -15,9 +19,10 @@ Rules:
 - Include negative scenarios: for the main flows, show what happens when the action fails or is refused, and what state is left behind.
 - Use a Scenario Outline with an Examples table for boundary values.
 - Do not invent business rules. Where the requirement leaves a value undefined, write the step with a placeholder such as "<TBD: maximum amount>" and add the tag @needs-clarification.
+- A criterion that is vague or about quality ("fast", "secure") still needs its own scenario: write it with <TBD: ...> placeholders and @needs-clarification rather than leaving it out.
 - Do not add priority tags: another agent assigns priorities.
 - Plain, concrete steps in business language. No UI selectors.`,
-  "Reply with the complete feature file in one ```gherkin code block and nothing else.",
+  REPLY_FORMAT,
 );
 
 export interface DesignBrief {
@@ -31,6 +36,9 @@ export interface DesignBrief {
 /** What the Test Designer is being asked to do on this round. */
 export type DesignTask =
   | { kind: "initial" }
+  /** The file is sound but leaves criteria or edge cases uncovered: write only the missing scenarios. */
+  | { kind: "extend"; previous: string; report: ValidationReport }
+  /** The file is broken (does not parse, or has malformed scenarios): rewrite it. */
   | { kind: "fix"; previous: string; report: ValidationReport }
   | { kind: "revise"; previous: string; issues: ReviewIssue[] };
 
@@ -63,6 +71,13 @@ function taskText(task: DesignTask, criteria: Criterion[]): string {
   if (task.kind === "initial") return "Write the feature file.";
 
   const previous = `Your previous feature file:\n\`\`\`gherkin\n${task.previous}\n\`\`\``;
+  if (task.kind === "extend") {
+    return [
+      previous,
+      `The file is valid, but the automated coverage check found gaps:\n${fixInstructions(task.report, criteria)}`,
+      "Write ONLY the new scenarios that close these gaps: each one a tag line followed by its Scenario. They will be appended to the file as it is. Do not repeat the Feature line, the Background or any existing scenario, and do not reuse an existing scenario name.",
+    ].join("\n\n");
+  }
   if (task.kind === "fix") {
     return [
       previous,
@@ -86,9 +101,26 @@ export async function runTestDesigner(
   const startMessage =
     task.kind === "initial"
       ? "Writing the first draft."
-      : task.kind === "fix"
-        ? "Fixing what the Validator rejected."
-        : "Revising after the Skeptic's review.";
+      : task.kind === "extend"
+        ? "Adding scenarios for what the Validator found uncovered."
+        : task.kind === "fix"
+          ? "Fixing what the Validator rejected."
+          : "Revising after the Skeptic's review.";
+
+  if (task.kind === "extend") {
+    const addition = await runFencedAgent(context, {
+      agent: "designer",
+      round,
+      system: SYSTEM.replace(REPLY_FORMAT, "Reply with only the new scenarios in one ```gherkin code block and nothing else."),
+      user: `${briefText(brief)}\n\n${taskText(task, brief.criteria)}`,
+      startMessage,
+      validate: (body) => {
+        if (!/^\s*(Scenario Outline|Scenario Template|Scenario|Example):/m.test(body)) throw new Error("The reply must contain at least one Scenario.");
+      },
+      describe: (body) => `${countScenarios(body)} scenario(s) added.`,
+    });
+    return appendScenarios(task.previous, addition);
+  }
 
   return runFencedAgent(context, {
     agent: "designer",
@@ -99,9 +131,28 @@ export async function runTestDesigner(
     validate: (body) => {
       if (!/^\s*(@\S+\s+)*Feature:/m.test(body)) throw new Error("The file must contain a 'Feature:' line.");
     },
-    describe: (feature) => {
-      const scenarios = (feature.match(/^\s*(Scenario Outline|Scenario Template|Scenario|Example):/gm) ?? []).length;
-      return `${scenarios} scenarios, ${feature.split("\n").length} lines.`;
-    },
+    describe: (feature) => `${countScenarios(feature)} scenarios, ${feature.split("\n").length} lines.`,
   });
+}
+
+function countScenarios(text: string): number {
+  return (text.match(/^\s*(Scenario Outline|Scenario Template|Scenario|Example):/gm) ?? []).length;
+}
+
+/**
+ * Appends new scenarios to an existing feature. If the model repeated the
+ * Feature header anyway, everything before the first tag or scenario is
+ * dropped, and the block is re-indented to sit under the Feature.
+ */
+export function appendScenarios(feature: string, addition: string): string {
+  const lines = addition.replace(/\r/g, "").split("\n");
+  const start = lines.findIndex((line) => /^\s*(@\S|Scenario Outline:|Scenario Template:|Scenario:|Example:)/.test(line));
+  const body = start === -1 ? lines : lines.slice(start);
+  const indents = body.filter((line) => line.trim()).map((line) => /^\s*/.exec(line)?.[0].length ?? 0);
+  const shift = 2 - Math.min(...indents, Number.MAX_SAFE_INTEGER);
+  const shifted = body.map((line) => {
+    if (!line.trim()) return "";
+    return shift >= 0 ? " ".repeat(shift) + line : line.slice(Math.min(-shift, /^\s*/.exec(line)?.[0].length ?? 0));
+  });
+  return `${feature.trimEnd()}\n\n${shifted.join("\n").trimEnd()}\n`;
 }

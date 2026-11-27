@@ -10,7 +10,8 @@ Rules:
 - One behaviour per criterion, written so a tester could pass or fail it.
 - Only what the requirement states or directly implies. Do not invent rules, limits or numbers. Where the requirement is vague, keep its vague wording: another agent handles ambiguity.
 - For each criterion, copy the exact words from the requirement that it comes from into "sourceQuote". Copy them character for character; a code check will look for them in the text.
-- Between 3 and 8 criteria. Merge near-duplicates.`,
+- Between 3 and 8 criteria. Merge near-duplicates.
+- Each criterion is one sentence of at most 25 words.`,
   `${JSON_ONLY}
 Shape:
 { "criteria": [ { "text": "The system ...", "sourceQuote": "exact words from the requirement" } ] }`,

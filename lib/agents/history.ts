@@ -21,7 +21,7 @@ Rules:
 - A lesson is a concrete risk the past bugs point to, phrased as what to test.
 - Cite the issue numbers each lesson is based on. Use only numbers that appear in the results; a code check removes any others.
 - Ignore results that are unrelated to the requirement. If nothing is relevant, return an empty "lessons" list and say so in "summary".
-- Up to 4 lessons.`,
+- Up to 4 lessons, each one sentence of at most 30 words. "summary" is at most 40 words.`,
   `${JSON_ONLY}
 Shape:
 { "summary": "one or two sentences on what the history shows", "lessons": [ { "lesson": "what to test and why", "issues": [123, 456] } ] }`,

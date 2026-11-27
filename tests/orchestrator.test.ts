@@ -56,12 +56,15 @@ class ScriptedLlm implements LlmClient {
   readonly calls: LlmRequest[] = [];
   private readonly inner = new MockLlmClient(0);
 
-  constructor(private readonly override: (request: LlmRequest, callNumber: number) => string | Error | undefined) {}
+  constructor(
+    private readonly override: (request: LlmRequest, callNumber: number) => string | Error | { text: string; truncated: boolean } | undefined,
+  ) {}
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
     this.calls.push(request);
     const scripted = this.override(request, this.calls.filter((call) => call.agent === request.agent).length);
     if (scripted instanceof Error) throw scripted;
+    if (typeof scripted === "object") return { ...scripted, tokensIn: 100, tokensOut: 100, model: request.model };
     if (scripted !== undefined) return { text: scripted, tokensIn: 100, tokensOut: 100, model: request.model, truncated: false };
     return this.inner.complete(request);
   }
@@ -125,6 +128,56 @@ describe("runPipeline", () => {
     expect(artifacts.exports?.[0].content).toContain("## Known gaps");
   });
 
+  it("asks only for the missing scenarios when a sound draft has coverage gaps, and appends them", async () => {
+    const draft = [
+      "```gherkin",
+      "Feature: Wallet top-up",
+      "",
+      "  @AC-1 @AC-2 @EC-1",
+      "  Scenario: Successful top-up",
+      "    When the customer tops up 20.00",
+      "    Then the balance increases by 20.00",
+      "",
+      "  @AC-3 @EC-3",
+      "  Scenario: Failed payment",
+      "    When the card is declined",
+      "    Then an error is shown",
+      "```",
+    ].join("\n");
+    // Deliberately not indented and with a repeated header: the code has to place it correctly.
+    const addition = "```gherkin\nFeature: Wallet top-up\n\n@AC-4 @needs-clarification\nScenario: Large amount asks for extra verification\n  When the customer tops up <TBD: large amount>\n  Then extra verification is requested\n```";
+    const llm = new ScriptedLlm((request, callNumber) => {
+      if (request.agent === "designer") return callNumber === 1 ? draft : addition;
+      if (request.agent === "skeptic") return '{"verdict":"pass","issues":[],"strengths":[]}';
+      return undefined;
+    });
+    const { events, artifacts, last } = await run(STORY, llm);
+
+    const designerCalls = llm.calls.filter((call) => call.agent === "designer");
+    expect(designerCalls).toHaveLength(2);
+    expect(designerCalls[1].messages[0].content).toContain("Write ONLY the new scenarios");
+    expect(designerCalls[1].messages[0].content).toContain("AC-4 has no scenario");
+
+    expect(ofType(events, "loop")).toHaveLength(1);
+    expect(artifacts.validation).toMatchObject({ ok: true, stats: { scenarios: 3, acCovered: 4, acTotal: 4 } });
+    expect(artifacts.feature).toContain("Scenario: Successful top-up");
+    expect(artifacts.feature).toContain("  Scenario: Large amount asks for extra verification");
+    expect(artifacts.feature?.match(/Feature:/g)).toHaveLength(1);
+    expect(last).toMatchObject({ type: "run_done", partial: false });
+  });
+
+  it("rejects a feature file that was cut off at the token limit and asks for a shorter one", async () => {
+    const cutOff = { text: "```gherkin\nFeature: X\n  @AC-1\n  Scenario: Fine so far\n    When a\n    Then b\n\n  @AC-2", truncated: true };
+    const llm = new ScriptedLlm((request, callNumber) => (request.agent === "designer" && callNumber === 1 ? cutOff : undefined));
+    const { events } = await run(STORY, llm);
+
+    const secondAsk = llm.calls.filter((call) => call.agent === "designer")[1];
+    expect(secondAsk.messages.at(-1)?.content).toMatch(/cut off before the file ended/);
+    const firstDraft = events.find((event) => event.type === "agent" && event.agent === "designer" && event.status === "done");
+    expect(firstDraft).toMatchObject({ round: 1 });
+    expect((firstDraft as { message: string }).message).toMatch(/Needed one retry/);
+  });
+
   it("keeps the earlier valid suite when the revision fails the checks", async () => {
     const llm = new ScriptedLlm((request, callNumber) =>
       // Call 3 is the revision the Skeptic asked for: make it unparseable, and fail its fix too.
@@ -141,11 +194,13 @@ describe("runPipeline", () => {
 
   it("gives the model one retry on unusable output, then carries on without that agent", async () => {
     const llm = new ScriptedLlm((request) => (request.agent === "ambiguity" ? "I'd rather not answer in JSON." : undefined));
-    const { artifacts, last } = await run(STORY, llm);
+    const { artifacts, last, events } = await run(STORY, llm);
 
     expect(llm.count("ambiguity")).toBe(2);
     expect(llm.calls.filter((call) => call.agent === "ambiguity")[1].messages).toHaveLength(3);
     expect(artifacts.ambiguities).toEqual([]);
+    const failure = events.find((event) => event.type === "agent" && event.agent === "ambiguity" && event.status === "error");
+    expect((failure as { message: string }).message).toBe("Output could not be used after one retry: the reply was not valid JSON.");
     expect(last).toMatchObject({ type: "run_done", partial: true });
   });
 

@@ -66,7 +66,7 @@ Steps 4, 5 and 6 run in parallel.
 
 ### Where agents check each other
 
-- **Validator to Test Designer.** A draft that does not parse, leaves a criterion or a high-severity edge case uncovered, or has a scenario with no `When` or `Then`, goes back with the exact list of problems. At most 2 rounds.
+- **Validator to Test Designer.** A draft that does not parse, leaves a criterion or a high-severity edge case uncovered, or has a scenario with no `When` or `Then`, goes back with the exact list of problems. If the file is sound and only coverage is missing, the Test Designer is asked for just the missing scenarios and code appends them, which is quicker and cannot lose existing coverage. At most 2 rounds.
 - **Skeptic to Test Designer.** A major objection sends the suite back once. If the revision fails the automated checks, the earlier valid suite is kept: a passing suite is never traded for a failing one.
 - **Code checks on what agents cite.** Quotes from the requirement are searched for in the text and flagged if not found. Issue numbers the History Scout cites are dropped unless the search really returned them. Criterion ids are assigned by code, so no agent can reference one that does not exist.
 
@@ -119,7 +119,7 @@ To work on the UI without spending tokens, set `MOCK_LLM=1` in `.env.local`. The
 
 ```bash
 npm run verify    # secret scan, lint, type-check, tests, production build
-npm test          # 71 unit and pipeline tests
+npm test          # 75 unit and pipeline tests
 ```
 
 The pipeline tests run the real orchestrator against a scripted model and assert the things that matter: step order, both feedback loops, loop caps when the Test Designer never produces a valid suite, graceful degradation when an agent fails, the token budget, cancellation, and that invented quotes and citations are caught.

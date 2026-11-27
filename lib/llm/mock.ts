@@ -150,8 +150,16 @@ function reply(agent: string, prompt: string, count: number): string {
       });
     }
 
-    case "designer":
+    case "designer": {
+      if (prompt.includes("Write ONLY the new scenarios")) {
+        const missing = [...prompt.matchAll(/- (?:High-severity edge case )?((?:AC|EC)-\d+) has no scenario/g)].map((match) => match[1]);
+        const scenarios = missing.map((id) =>
+          [`  @${id.startsWith("EC") ? `AC-1 @${id}` : id}`, `  Scenario: Added coverage for ${id}`, "    Given a signed-in user on the feature page", `    When the user does what ${id} describes`, "    Then the expected result is shown"].join("\n"),
+        );
+        return "```gherkin\n" + scenarios.join("\n\n") + "\n```";
+      }
       return "```gherkin\n" + mockFeature(ids(prompt, "AC"), ids(prompt, "EC"), count) + "\n```";
+    }
 
     case "skeptic":
       return JSON.stringify({

@@ -418,7 +418,9 @@ function LogTab({ events }: { events: RunEvent[] }) {
     const time = `${(event.t / 1000).toFixed(1).padStart(6, " ")}s`;
     switch (event.type) {
       case "agent":
-        return `${time}  ${event.agent.padEnd(10)} ${event.status}${event.round ? ` r${event.round}` : ""}${event.message ? `  ${event.message}` : ""}`;
+        return `${time}  ${event.agent.padEnd(10)} ${event.status}${event.round ? ` r${event.round}` : ""}${
+          event.tokensIn || event.tokensOut ? `  [${event.tokensIn ?? 0} in, ${event.tokensOut ?? 0} out]` : ""
+        }${event.message ? `  ${event.message}` : ""}`;
       case "tool":
         return `${time}  ${event.agent.padEnd(10)} tool ${event.tool} ${event.ok ? "ok" : "FAILED"}  ${event.message}`;
       case "loop":

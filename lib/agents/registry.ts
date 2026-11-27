@@ -33,7 +33,7 @@ export const AGENTS: readonly AgentSpec[] = [
     short: "Planner",
     kind: "llm",
     tier: "main",
-    maxTokens: 500,
+    maxTokens: 900,
     blurb: "Sizes up the requirement and sets the risk focus for the other agents.",
   },
   {
@@ -42,7 +42,7 @@ export const AGENTS: readonly AgentSpec[] = [
     short: "Analyst",
     kind: "llm",
     tier: "fast",
-    maxTokens: 1200,
+    maxTokens: 1800,
     blurb: "Extracts testable acceptance criteria, each tied to a quoted line.",
   },
   {
@@ -51,7 +51,7 @@ export const AGENTS: readonly AgentSpec[] = [
     short: "Hunter",
     kind: "llm",
     tier: "main",
-    maxTokens: 1600,
+    maxTokens: 3000,
     blurb: "Finds vague or missing requirements and writes the questions to ask the client.",
   },
   {
@@ -60,7 +60,7 @@ export const AGENTS: readonly AgentSpec[] = [
     short: "Explorer",
     kind: "llm",
     tier: "fast",
-    maxTokens: 1500,
+    maxTokens: 2600,
     blurb: "Lists boundaries, error paths, permissions and state problems.",
   },
   {
@@ -69,7 +69,7 @@ export const AGENTS: readonly AgentSpec[] = [
     short: "Scout",
     kind: "llm",
     tier: "fast",
-    maxTokens: 900,
+    maxTokens: 1400,
     blurb: "Chooses search terms, searches the repo's closed bugs, and extracts lessons.",
   },
   {
@@ -78,7 +78,7 @@ export const AGENTS: readonly AgentSpec[] = [
     short: "Designer",
     kind: "llm",
     tier: "main",
-    maxTokens: 3200,
+    maxTokens: 6000,
     blurb: "Writes the Gherkin suite, and rewrites it when the checks or the Skeptic object.",
   },
   {
@@ -94,7 +94,7 @@ export const AGENTS: readonly AgentSpec[] = [
     short: "Skeptic",
     kind: "llm",
     tier: "main",
-    maxTokens: 1100,
+    maxTokens: 2200,
     blurb: "Attacks the suite: weak assertions, missing negatives, duplicates.",
   },
   {
@@ -103,7 +103,7 @@ export const AGENTS: readonly AgentSpec[] = [
     short: "Ranker",
     kind: "llm",
     tier: "fast",
-    maxTokens: 1200,
+    maxTokens: 2200,
     blurb: "Sets a priority for each scenario, with a reason.",
   },
   {

@@ -162,8 +162,11 @@ export async function runPipeline(
           max: deps.limits.maxFixRounds,
           reason: describeValidation(current.report),
         });
+        // A sound file with coverage gaps only needs the missing scenarios, which
+        // is quicker and cheaper than a rewrite and cannot lose existing coverage.
+        const gapsOnly = current.parsed.ok && current.parsed.scenarios.length > 0 && current.report.stepIssues.length === 0;
         try {
-          current = validate(await design({ kind: "fix", previous: current.feature, report: current.report }));
+          current = validate(await design({ kind: gapsOnly ? "extend" : "fix", previous: current.feature, report: current.report }));
         } catch (error) {
           carryOnAfter(error, "A fix round failed, so the earlier draft was kept.");
           break;

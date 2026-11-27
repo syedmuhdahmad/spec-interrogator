@@ -10,7 +10,7 @@ Rules:
 - Raise the priority of scenarios in areas where past bugs were found, and of scenarios that depend on an unanswered question (they are the likeliest to be built wrong).
 - Not everything is P1: at most about a third of the scenarios.
 - Rank every scenario id you are given, once.
-- "reason": one short sentence specific to that scenario.`,
+- "reason": one sentence of at most 15 words, specific to that scenario.`,
   `${JSON_ONLY}
 Shape:
 { "ranking": [ { "id": "S1", "priority": "P1 | P2 | P3", "reason": "why" } ] }`,

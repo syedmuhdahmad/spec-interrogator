@@ -8,11 +8,11 @@ const SYSTEM = systemPrompt(
   `${JSON_ONLY}
 Shape:
 {
-  "domain": "short label, e.g. Payments, Healthcare scheduling, Authentication",
-  "summary": "one or two sentences: what is being built and for whom",
-  "focusAreas": ["3 to 5 risk areas for this requirement, most important first"],
+  "domain": "short label of 1 to 4 words, e.g. Payments, Healthcare scheduling, Authentication",
+  "summary": "one sentence, at most 35 words: what is being built and for whom",
+  "focusAreas": ["3 to 5 risk areas, most important first, each a phrase of at most 8 words"],
   "riskLevel": "high | medium | low (how costly a defect here would be)",
-  "notes": "anything unusual the other agents should know, or an empty string"
+  "notes": "one sentence on anything unusual the other agents should know, or an empty string"
 }`,
 );
 

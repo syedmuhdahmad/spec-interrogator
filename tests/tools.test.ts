@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Criterion, EdgeCase } from "@/lib/core/types";
 import { checkCoverage } from "@/lib/tools/coverage";
 import { buildExports, buildJiraCsv, buildPlaywrightSpec, commentSafe, csvCell, type ReportInput } from "@/lib/tools/exporters";
+import { appendScenarios } from "@/lib/agents/designer";
 import { applyPriorityTags, parseGherkin } from "@/lib/tools/gherkin";
 import { parseIssueUrl, sanitizeSearchTerms } from "@/lib/tools/github";
 
@@ -149,6 +150,23 @@ describe("applyPriorityTags", () => {
     const bare = "Feature: X\n  Scenario: Y\n    When a\n    Then b\n";
     const tagged = applyPriorityTags(bare, parseGherkin(bare).scenarios, new Map([["S1", "P2"]]));
     expect(parseGherkin(tagged).scenarios[0].tags).toEqual(["@P2"]);
+  });
+});
+
+describe("appendScenarios", () => {
+  const base = "Feature: X\n\n  @AC-1\n  Scenario: First\n    When a\n    Then b\n";
+
+  it("drops a repeated Feature header and indents the new scenarios under the feature", () => {
+    const merged = appendScenarios(base, "Feature: X\n  Some description\n\n@AC-2\nScenario: Second\n  When c\n  Then d");
+    expect(merged.match(/Feature:/g)).toHaveLength(1);
+    expect(merged).toContain("\n\n  @AC-2\n  Scenario: Second\n    When c\n    Then d\n");
+    expect(parseGherkin(merged).scenarios.map((scenario) => scenario.name)).toEqual(["First", "Second"]);
+  });
+
+  it("pulls in over-indented scenarios", () => {
+    const merged = appendScenarios(base, "      @AC-2\n      Scenario: Second\n        When c\n        Then d");
+    expect(merged).toContain("\n  @AC-2\n  Scenario: Second\n    When c\n");
+    expect(parseGherkin(merged).ok).toBe(true);
   });
 });
 

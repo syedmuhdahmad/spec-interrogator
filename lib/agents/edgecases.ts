@@ -10,7 +10,8 @@ Rules:
 - Think through: boundary values, empty and invalid input, error and timeout paths, permissions and roles, repeated or simultaneous actions, state left behind after a failure, and locale (time zone, currency, language) where relevant.
 - Each case must be specific to this requirement, not a generic checklist line.
 - "relatedAC": the id of the acceptance criterion it stresses (for example "AC-2").
-- "expected": what the system should do. If the requirement does not say, write "Not specified: needs a decision".
+- "title": at most 12 words.
+- "expected": what the system should do, in one sentence of at most 25 words. If the requirement does not say, write "Not specified: needs a decision" and nothing more.
 - "severity": high when a failure would lose data, money or access, or block the main flow.
 - Between 4 and 8 cases, highest severity first.`,
   `${JSON_ONLY}

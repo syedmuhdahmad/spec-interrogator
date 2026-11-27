@@ -11,7 +11,9 @@ Rules:
 - Flag something only if the answer would change what gets built or how it is tested. Skip nitpicks.
 - Typical finds: unmeasurable words ("fast", "secure", "reasonable"), undefined limits and units, unstated error behaviour, unclear actors or permissions, missing time zones, currencies or formats, and conflicts between sentences.
 - "quote": copy the exact words from the requirement that are the problem. A code check will look for them in the text. If the problem is that something is not mentioned at all, use an empty string for "quote" and start "term" with "Missing: ".
-- "question": one direct question a client can answer in a sentence, offering concrete options where that helps.
+- "question": one direct question a client can answer in a sentence, offering concrete options where that helps. At most 40 words.
+- "whyItMatters": one sentence, at most 30 words.
+- "term": at most 6 words.
 - "severity": high when a wrong guess would cause rework or a production defect; low when a sensible default exists.
 - Up to 8 items, most severe first.`,
   `${JSON_ONLY}
