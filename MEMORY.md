@@ -12,13 +12,14 @@ Every agent working on this repository reads this file first and updates it befo
 
 ## Where things stand
 
-Last updated: Fri 27 Nov 2026, 13:40 PKT.
+Last updated: Fri 27 Nov 2026, 14:55 PKT.
 
 - **Deadline:** submissions close Mon 30 Nov 2026 at 2:00 PM PKT. Aim to submit by 10:00 AM. The app must stay live until winners are announced in mid-December.
 - **Live:** https://spec-interrogator.vercel.app, deployed from `main` by Vercel (project `spec-interrogator`). Every push to `main` redeploys. A changed environment variable needs a redeploy to take effect.
 - **Repo:** `syedmuhdahmad/spec-interrogator`, public. CI (GitHub Actions) runs the secret scan, lint, type-check, tests and build on every push.
-- **Phase 1 (Foundation) is done.** The whole pipeline works on the live site with the real models. 109 tests pass.
-- **Phase 2 (Live tuning) is under way.** Only one of the four samples (CASE 01, wallet top-up) has been run live. The other three have never been run against the real models.
+- **Phase 1 (Foundation) is done.** The whole pipeline works on the live site with the real models. 134 tests pass.
+- **Phase 2 (Live tuning) is under way.** Only one of the four samples (CASE 01, wallet top-up) has been run live, most recently on the 27 Nov midday code. The other three have never been run against the real models.
+- **That CASE 01 run showed four more weaknesses, now fixed in code and prompts** (commits "Carry Background steps into the exports and name what the Validator rejected" and "Show the Skeptic the open questions and keep placeholders narrow"). The two prompt changes are unconfirmed until the next live run.
 - **The six weaknesses from the second real run are fixed, and a third real run on the same story confirmed most of it.** Four held fully (no invented outcomes, the `@needs-clarification` tag in the right place, Examples in the exports, the Analyst keeps the actor). Two held mostly: 2 of 8 questions still join two decisions with "and" (it was 5 of 8 with three each), and one Risk Ranker reason still cites a loosely related question. The Skeptic did not object to placeholders. This is one story only; the samples have not been checked.
 - **Three export defects from that third run are fixed in code and tested** (commit "Name uncovered edge cases, keep the clarification tag in stubs, tidy file names").
 - **No recorded replays exist yet.** `public/replays/` is empty, so `DEMO_MODE=replay` has nothing to show.
@@ -47,6 +48,8 @@ CASE 01 (wallet top-up) on the production URL, 27 Nov:
 
 Per-agent tokens in the tuned run: Planner 773, Analyst 1,338, Ambiguity Hunter 2,200, Edge-Case Explorer 2,263, Test Designer 2,972, Skeptic 4,339, Risk Ranker 2,305.
 
+CASE 01 again on the 27 Nov midday code, with both loops firing (one Validator fix round, one Skeptic revision): 9 model calls, 30,688 tokens, 68 s, about $0.20 at the assumed prices (summed from the Log tab, not read off the screen). 6 of 6 criteria, 6 of 7 edge cases, 9 scenarios. The Test Designer ran three times and used 16,363 of the tokens. So a run costs about $0.10 when the first draft passes and about $0.20 when both loops fire.
+
 ## Decisions, and why
 
 - **Parsing and coverage are code, not model calls.** They are facts to compute. This is also the app's best argument that the agents really check each other.
@@ -61,7 +64,11 @@ Per-agent tokens in the tuned run: Planner 773, Analyst 1,338, Ambiguity Hunter 
 - **The history tool uses a two-turn JSON pattern, not native function calling.** Nobody has confirmed that the gateway passes tool calls through, and this works either way.
 - **No database.** Nothing a visitor pastes is stored.
 - **Code owns the `@needs-clarification` tag.** `lib/tools/clarification.ts` strips it wherever the model wrote it and puts it on every scenario that contains a `<TBD` placeholder. The models are told not to write it.
-- **The Test Designer and the Risk Ranker are given the open questions** (term and question only, at most eight). Without them the suite asserted answers to things the Ambiguity Hunter had listed as undecided. The Skeptic is not given them yet: one change at a time.
+- **The Test Designer and the Risk Ranker are given the open questions** (term and question only, at most eight). Without them the suite asserted answers to things the Ambiguity Hunter had listed as undecided.
+- **The Skeptic is given the open questions too.** In a live run it called a placeholder scenario for an open question ("how fast is fast") an invented rule, and the revision dropped it, leaving that question with no test.
+- **A placeholder covers the undecided part only, and a Then step must be observable.** The Test Designer is told both. A live run had scenarios whose Then steps were all placeholders, and one Then step that named an internal mechanism.
+- **Background steps live in `ScenarioInfo.background`, not in `steps`.** The coverage check and the step count see only a scenario's own steps; the Jira CSV and the Playwright stubs print the Background before them.
+- **The Validator's timeline line names the first two scenario problems** (at most 320 characters). A bare count told neither a judge nor a developer what was sent back.
 - **A tag line that follows a step is not rejected by the Validator.** A model that leaves no blank line between scenarios would trip that check on every scenario. Code owning the tag fixes the case that was seen.
 
 ## Lessons learned
@@ -80,7 +87,7 @@ Per-agent tokens in the tuned run: Planner 773, Analyst 1,338, Ambiguity Hunter 
 - **When a retry succeeds, the reason is now on the timeline** ("Needed one retry: ..."). Before 27 Nov it was only in the server log.
 - **Check the commit author before committing.** This machine's default git identity is not the address this repository's history uses. `git log -1 --format=%ae` should end in `users.noreply.github.com`. Five commits had to be re-authored before a push because of this.
 - **Prompt changes cannot be proven offline.** The scripted-model tests prove what a prompt contains and what the code does with a reply, not that the real models comply.
-- **Check escapes after an edit.** An editing tool once turned the escape sequences for U+2028 and U+2029 in a regular expression into the raw characters, which broke the pattern.
+- **Check escapes after an edit.** An editing tool has twice turned the escape sequences for U+2028 and U+2029 into the raw characters, which broke a pattern and then a test file. After editing a file that holds them, search it for the raw characters.
 - **Two `pipeline-builder` agents can work at once** if each is given its own list of files and told not to touch the other's.
 
 ## Open risks
@@ -90,18 +97,22 @@ Per-agent tokens in the tuned run: Planner 773, Analyst 1,338, Ambiguity Hunter 
 3. **Cancellation on Vercel is untested.** `vercel.json` sets `supportsCancellation` for the run route as Vercel's docs describe, but nobody has confirmed on the live site that pressing Stop ends the model calls.
 4. **Three samples are untested live.** The GitHub sample (`microsoft/playwright` issue 30976) was picked from a search listing and has never been fetched by the app.
 5. **No loop appears when the first draft passes.** That is correct, but judges then do not see the Validator send work back. Consider whether a sample should reliably show one. The owner has not decided.
-6. **Many placeholder steps on a vague story.** In the third real run 6 of 8 scenarios held a `<TBD: ...>` step. That is honest and the Skeptic left them alone, but nobody has judged how it reads on the made-up samples.
-7. **"Addressed in the revision" is not verified.** The chip and the test plan heading appear when a revised suite passes the parser and the coverage check. Nothing checks that the Skeptic's objections were really fixed. In the third real run all four notes were in fact fixed (checked by hand). The notes can name scenarios that the revision renamed.8. **No code checks that a Then step is observable.** "Then it works" passes the Validator; only the Skeptic can catch it.
+6. **Many placeholder steps on a vague story.** On CASE 01, 8 of 9 scenarios held a `<TBD: ...>` step and three had nothing else in their Then steps. The Test Designer prompt was narrowed for this; the effect is unconfirmed. Watch both ways: too many placeholders, or the suite going back to asserting undecided things.
+7. **"Addressed in the revision" is not verified.** The chip and the test plan heading appear when a revised suite passes the parser and the coverage check. Nothing checks that the Skeptic's objections were really fixed. In the third real run all four notes were in fact fixed (checked by hand). The notes can name scenarios that the revision renamed.
+8. **No code checks that a Then step is observable.** "Then it works" passes the Validator; only the Skeptic can catch it.
 9. **Jira import is untested.** The Examples table header is written as an ordinary row, and nobody has imported the CSV into Jira.
-10. **A question can have no test.** The Analyst now keeps to the requirement's own list of criteria, so a task line that is not an acceptance criterion may get a client question and no scenario. Seen once. Do not change the prompt unless a sample shows it too.
+10. **A question can have no test.** The Analyst now keeps to the requirement's own list of criteria, so a task line that is not an acceptance criterion may get a client question and no scenario. Seen once from this cause; do not change the Analyst prompt unless a sample shows it too. (A second case on CASE 01 had another cause, the Skeptic, and is fixed.)
 11. **The limit of eight questions can crowd one out.** Splitting bundled questions used the slots, and a question about an expected value that the earlier run asked was missing; the suite then asserted that value without a placeholder.
+12. **The longer Validator line has not been seen in a browser.** It can now be up to 320 characters on the timeline and in the Log tab. It is plain wrapping text, so it should be fine, but nobody has looked.
+13. **A placeholder inside a Background step tags nothing.** `lib/tools/clarification.ts` looks at each scenario's own block, on purpose. Such a step now shows in both exports with no `@needs-clarification` label.
+14. **What the Validator rejected on CASE 01 is unknown.** The run predates the named line; it said only "3 scenario problem(s)". The next run that loops will say.
 
 ## Next steps
 
 In order. Each has a GitHub issue under its milestone.
 
-1. Run CASE 02, CASE 03 and the GitHub sample live, read the output as a QA lead would, and tune prompts (#9, #11, #12). Ask the owner for the Log tab as well as the files: the third real run came without it, so its tokens, time and cost are unknown. Check that the prompt fixes hold on the samples too, and watch for open risks 10 and 11. Each run costs about $0.10 to $0.15, more with a revision round. The owner runs them and pastes the output. Ask before spending.
-2. Decide with the owner whether a sample should reliably show a feedback loop. Give options and a recommendation; do not fake a loop. New evidence: the third real run produced a genuine Skeptic revision (a test that could not catch the fault it was tagged for), so loops do happen unprompted on a rich story.
+1. Run CASE 02, CASE 03 and the GitHub sample live, read the output as a QA lead would, and tune prompts (#9, #11, #12). Ask the owner for the Log tab as well as the files. On the first run after the 27 Nov afternoon push, check the two new prompt rules: the Skeptic leaves placeholder scenarios alone, and no scenario is all placeholders. Watch for open risks 6, 10 and 11, and read what the Validator names if it sends a draft back. Each run costs about $0.10 to $0.15, more with a revision round. The owner runs them and pastes the output. Ask before spending.
+2. Decide with the owner whether a sample should reliably show a feedback loop. Give options and a recommendation; do not fake a loop. New evidence: the last two real runs both produced a genuine Skeptic revision, and CASE 01 also a Validator fix round, so loops do happen unprompted. A looping run costs about twice a clean one.
 3. Compare the on-screen cost estimate with real LiteLLM spend and set `PRICE_MAIN` / `PRICE_FAST` if needed (#10).
 4. Add `GITHUB_TOKEN` (fine-grained, public repositories, read-only) on Vercel and redeploy (#12). The owner does this.
 5. Confirm on the live site that Stop cancels a run. Tell the owner how it will be checked before doing it.
@@ -116,7 +127,9 @@ In order. Each has a GitHub issue under its milestone.
 - The midday commits were pushed and deployed. The owner connected the Vercel connector for read-only use (deployment status and runtime logs). The plan keeps runtime logs for about one hour, and a clean run writes nothing to them.
 - Reviewed a third real run from its four export files, on the same non-sample story as the second, so the two could be compared line by line. See "Where things stand" for what held.
 - Fixed three export defects it showed, with tests (102 to 109): Playwright stubs lost the `@needs-clarification` tag, file names could end in a hyphen, and the test plan did not name the edge cases with no scenario.
-- Still open: the samples are unrun, the owner has not answered whether two server log lines may be added for the Stop check, and the loop decision has not been put to the owner.
+- The owner then ran CASE 01 on that code and pasted the Log tab and all four files. Both loops fired. It confirmed the three export fixes live and showed four more weaknesses, fixed with tests (109 to 134): Background steps were missing from the Jira CSV and the stubs, the Validator's line was only a count, the Skeptic had a placeholder scenario dropped, and placeholders were over-used.
+- The owner said "not now" to adding server log lines for the Stop check, so that check is parked.
+- Still open: CASE 02, CASE 03 and the GitHub sample are unrun, and the loop decision has not been put to the owner.
 
 ### Fri 27 Nov 2026 (Claude Code on the owner's machine, midday)
 
