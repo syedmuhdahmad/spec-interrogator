@@ -212,7 +212,7 @@ export function Workbench() {
               ■ Stop
             </button>
           ) : null}
-          <span className="text-sm text-muted">A run takes one to three minutes and uses a shared demo budget.</span>
+          <span className="text-sm text-muted">A run takes about a minute and uses a shared demo budget.</span>
         </div>
       </form>
 

@@ -10,4 +10,4 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## Project rules
 
-The rules for this project (hackathon constraints, structure, conventions) are in `CLAUDE.md`. Read it before changing anything.
+The rules for this project (hackathon constraints, structure, conventions) are in `CLAUDE.md`, and the memory all agents share is in `MEMORY.md`. Read both before changing anything, and update `MEMORY.md` before you finish.

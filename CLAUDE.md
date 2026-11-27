@@ -2,6 +2,12 @@
 
 This is Syed Muhammad Ahmad's entry for the SSI Agent-A-Thon 2026. Read `README.md` for what the app does and `AGENTS.md` for the Next.js 16 notes (this version differs from older ones: check `node_modules/next/dist/docs/` before using a Next.js API).
 
+## Shared memory
+
+@MEMORY.md
+
+`MEMORY.md` is the memory every agent shares: where things stand, what was measured, what was decided and why, and what went wrong before. Read it before you start. Before you finish a session, update "Where things stand" and "Next steps" and add one dated entry to "Session log". The repository is public, so nothing private goes in it.
+
 ## Hackathon rules that override everything else
 
 1. **Never write a key, token or gateway address into any file that git tracks.** Settings live in `.env.local` (ignored) and in Vercel. Do not read `.env.local`. Do not print environment values. An API key in the repository disqualifies the entry.
