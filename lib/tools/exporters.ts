@@ -54,6 +54,38 @@ export function commentSafe(value: string): string {
   return value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim();
 }
 
+/**
+ * Writes one Examples cell so it always stays one cell on one line. A
+ * backslash, a pipe and a line break are written the way Gherkin itself
+ * escapes them, so the table can be pasted back into a feature file. Any
+ * other line-break or control character becomes a space.
+ */
+function tableCell(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/\r\n?|\n/g, "\\n")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")
+    .trim();
+}
+
+function tableRow(cells: string[]): string {
+  return `| ${cells.map(tableCell).join(" | ")} |`;
+}
+
+/** The Examples tables of a scenario as lines of text: one block per table, header row first. */
+function examplesBlocks(scenario: ScenarioInfo): string[][] {
+  return (scenario.examples ?? [])
+    .map((table) => [table.header, ...table.rows].filter((cells) => cells.length > 0).map(tableRow))
+    .filter((lines) => lines.length > 0);
+}
+
+/** "Missing: supported currencies" reads badly after "Clarify:", so it is folded into the prefix. */
+function clarifySummary(term: string): string {
+  const missing = /^\s*missing\s*:\s*(\S[\s\S]*)$/i.exec(term);
+  return missing ? `Clarify (missing): ${missing[1].trim()}` : `Clarify: ${term}`;
+}
+
 function slug(value: string): string {
   return (
     value
@@ -170,6 +202,10 @@ export function buildPlaywrightSpec(input: ReportInput): string {
     for (const step of scenario.steps) {
       out.push(`    // ${commentSafe(`${step.keyword} ${step.text}`)}`);
     }
+    for (const block of examplesBlocks(scenario)) {
+      out.push("    // Examples:");
+      for (const line of block) out.push(`    //   ${commentSafe(line)}`);
+    }
     if (scenario.isOutline) out.push(`    // Scenario Outline: run once per Examples row (${scenario.exampleRows}).`);
     out.push("  });");
   });
@@ -183,7 +219,7 @@ export function buildJiraCsv(input: ReportInput): string {
 
   for (const item of input.ambiguities) {
     rows.push([
-      `Clarify: ${item.term}`,
+      clarifySummary(item.term),
       "Task",
       item.severity === "high" ? "High" : item.severity === "medium" ? "Medium" : "Low",
       "needs-clarification",
@@ -198,12 +234,17 @@ export function buildJiraCsv(input: ReportInput): string {
     const scenario = scenarioById.get(item.id);
     const steps = scenario ? scenario.steps.map((step) => `${step.keyword} ${step.text}`).join("\n") : "";
     const labels = ["test-case", ...item.tags.filter((tag) => /^@(AC|EC)-\d+$/i.test(tag)).map((tag) => tag.slice(1))];
+    if ([...item.tags, ...(scenario?.tags ?? [])].some((tag) => /^@needs-clarification$/i.test(tag))) {
+      labels.push("needs-clarification");
+    }
+    // Without its Examples table a Scenario Outline cannot be run: the steps only hold <placeholders>.
+    const examples = scenario ? examplesBlocks(scenario).flatMap((block) => ["", "Examples:", ...block]) : [];
     rows.push([
       `Test: ${item.scenario}`,
       "Test",
       JIRA_PRIORITY[item.priority] ?? "Medium",
       labels.join(" "),
-      [`Priority reason: ${item.reason}`, "", steps].join("\n").trim(),
+      [`Priority reason: ${item.reason}`, "", steps, ...examples].join("\n").trim(),
     ]);
   }
 

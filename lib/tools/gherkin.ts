@@ -20,7 +20,11 @@ interface AstScenario {
   location: { line: number };
   tags: readonly AstTag[];
   steps: readonly { keyword: string; keywordType?: string; text: string }[];
-  examples: readonly { tableBody?: readonly unknown[] }[];
+  examples: readonly { tableHeader?: AstTableRow; tableBody?: readonly AstTableRow[] }[];
+}
+
+interface AstTableRow {
+  cells: readonly { value: string }[];
 }
 
 interface AstChild {
@@ -67,6 +71,13 @@ export function parseGherkin(text: string): ParsedFeature {
         previousKind = kind;
         return { keyword: step.keyword.trim(), kind, text: step.text };
       });
+      // An Examples block with no table at all carries nothing worth exporting.
+      const examples = scenario.examples
+        .map((example) => ({
+          header: (example.tableHeader?.cells ?? []).map((cell) => cell.value),
+          rows: (example.tableBody ?? []).map((row) => row.cells.map((cell) => cell.value)),
+        }))
+        .filter((table) => table.header.length > 0 || table.rows.length > 0);
       return {
         id: `S${index + 1}`,
         name: scenario.name.trim(),
@@ -75,6 +86,7 @@ export function parseGherkin(text: string): ParsedFeature {
         tagLine: scenario.tags.length ? Math.max(...scenario.tags.map((tag) => tag.location.line)) : undefined,
         isOutline: /outline|template/i.test(scenario.keyword),
         exampleRows: scenario.examples.reduce((sum, example) => sum + (example.tableBody?.length ?? 0), 0),
+        ...(examples.length ? { examples } : {}),
         steps,
       };
     });

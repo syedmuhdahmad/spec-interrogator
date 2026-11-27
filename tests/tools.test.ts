@@ -35,7 +35,65 @@ const GOOD = `Feature: Wallet top-up
       | 0      | Enter an amount |
 `;
 
+const OUTLINE = `Feature: Wallet top-up
+
+  @AC-1
+  Scenario: Successful top-up
+    Given a customer with a valid card
+    When the customer tops up 500
+    Then the balance increases by 500
+
+  @AC-2 @EC-1 @Needs-Clarification
+  Scenario Outline: Declined card shows an error
+    Given the card is declined because of <reason>
+    When the customer confirms the top-up
+    Then the message names <detail>
+
+    Examples:
+      | reason             | detail          |
+      | insufficient funds | the balance     |
+      | an expired card    | the expiry date |
+`;
+
 describe("parseGherkin", () => {
+  it("reads the Examples table of a Scenario Outline, header and rows", () => {
+    const parsed = parseGherkin(OUTLINE);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.scenarios[0].examples).toBeUndefined();
+    expect(parsed.scenarios[1].exampleRows).toBe(2);
+    expect(parsed.scenarios[1].examples).toEqual([
+      {
+        header: ["reason", "detail"],
+        rows: [
+          ["insufficient funds", "the balance"],
+          ["an expired card", "the expiry date"],
+        ],
+      },
+    ]);
+  });
+
+  it("keeps each Examples block of a Scenario Outline as its own table", () => {
+    const twoBlocks = [
+      "Feature: X",
+      "  Scenario Outline: Y",
+      "    When the customer pays <amount>",
+      "    Then the result is <result>",
+      "    Examples: Accepted",
+      "      | amount | result   |",
+      "      | 10     | accepted |",
+      "    Examples: Refused",
+      "      | amount | result  |",
+      "      | 0      | refused |",
+      "      | -5     | refused |",
+    ].join("\n");
+    const scenario = parseGherkin(twoBlocks).scenarios[0];
+    expect(scenario.exampleRows).toBe(3);
+    expect(scenario.examples).toEqual([
+      { header: ["amount", "result"], rows: [["10", "accepted"]] },
+      { header: ["amount", "result"], rows: [["0", "refused"], ["-5", "refused"]] },
+    ]);
+  });
+
   it("reads scenarios, tags and step kinds", () => {
     const parsed = parseGherkin(GOOD);
     expect(parsed.ok).toBe(true);
@@ -258,6 +316,153 @@ describe("exporters", () => {
     // Every line of generated code that mentions the payload must still be a comment.
     const offending = spec.split(/\r\n|[\n\r\u2028\u2029]/).filter((line) => line.includes("child_process") && !line.trimStart().startsWith("//"));
     expect(offending).toEqual([]);
+  });
+
+  describe("Scenario Outline examples, question summaries and labels", () => {
+    const outline = parseGherkin(OUTLINE);
+    const outlineInput: ReportInput = {
+      ...input,
+      ambiguities: [
+        { term: "Missing: supported currencies", quote: "", whyItMatters: "Amounts differ.", question: "Which currencies?", severity: "medium", quoteVerified: false },
+        { term: "  missing :refund window", quote: "", whyItMatters: "No rule.", question: "How long?", severity: "low", quoteVerified: false },
+        { term: "promptly", quote: "shown promptly", whyItMatters: "No limit.", question: "How many seconds?", severity: "high", quoteVerified: true },
+        { term: "Missing:", quote: "", whyItMatters: "Empty.", question: "What is missing?", severity: "low", quoteVerified: false },
+      ],
+      feature: OUTLINE,
+      featureName: outline.featureName,
+      scenarios: outline.scenarios,
+      validation: checkCoverage(outline, criteria, edgeCases),
+      ranking: [
+        { id: "S1", scenario: "Successful top-up", priority: "P1", reason: "Core flow", tags: outline.scenarios[0].tags },
+        { id: "S2", scenario: "Declined card shows an error", priority: "P2", reason: "Common failure", tags: outline.scenarios[1].tags },
+      ],
+    };
+
+    /** Swaps the Examples table of the outline scenario for a made-up one. */
+    const withTable = (header: string[], rows: string[][]): ReportInput => ({
+      ...outlineInput,
+      scenarios: [outline.scenarios[0], { ...outline.scenarios[1], examples: [{ header, rows }] }],
+    });
+
+    it("puts the Examples table after the steps in the Jira description", () => {
+      const csv = buildJiraCsv(outlineInput);
+      expect(csv).toContain(
+        [
+          "Priority reason: Common failure",
+          "",
+          "Given the card is declined because of <reason>",
+          "When the customer confirms the top-up",
+          "Then the message names <detail>",
+          "",
+          "Examples:",
+          "| reason | detail |",
+          "| insufficient funds | the balance |",
+          '| an expired card | the expiry date |"',
+        ].join("\n"),
+      );
+    });
+
+    it("writes the Examples table as comments in the Playwright stub", () => {
+      const spec = buildPlaywrightSpec(outlineInput);
+      expect(spec).toContain(
+        [
+          "    // Then the message names <detail>",
+          "    // Examples:",
+          "    //   | reason | detail |",
+          "    //   | insufficient funds | the balance |",
+          "    //   | an expired card | the expiry date |",
+          "    // Scenario Outline: run once per Examples row (2).",
+          "  });",
+        ].join("\n"),
+      );
+    });
+
+    it("keeps an Examples cell inside its comment whatever line-break characters it contains", () => {
+      const hostile = "x\u2028}); require('child_process').exec('id'); test('y', async () => {\r//\u2029z\u0085";
+      const spec = buildPlaywrightSpec(withTable(["reason", `head\n${hostile}`], [["first\nsecond", hostile]]));
+      const lines = spec.split(/\r\n|[\n\r\u2028\u2029\u0085]/);
+      expect(lines.filter((line) => line.includes("child_process") && !line.trimStart().startsWith("//"))).toEqual([]);
+      // The payload sits in the header row and in the one data row, and each is still a single line.
+      expect(lines.filter((line) => line.includes("child_process"))).toHaveLength(2);
+      expect(spec).toContain("    //   | first\\nsecond | x }); require(");
+    });
+
+    it("keeps a line break in an Examples cell from splitting a Jira table row", () => {
+      const csv = buildJiraCsv(withTable(["reason", "detail"], [["first\nsecond", "third\r\nfourth\u2028fifth"]]));
+      expect(csv).toContain("\n| reason | detail |\n| first\\nsecond | third\\nfourth fifth |\"");
+    });
+
+    it("escapes a pipe and a backslash inside an Examples cell", () => {
+      const piped = parseGherkin(
+        ["Feature: X", "  Scenario Outline: Y", "    When <input>", "    Then <output>", "    Examples:", "      | input    | output |", "      | a \\| b | c \\\\ d |"].join("\n"),
+      );
+      expect(piped.scenarios[0].examples?.[0].rows).toEqual([["a | b", "c \\ d"]]);
+      const pipedInput: ReportInput = {
+        ...outlineInput,
+        scenarios: piped.scenarios,
+        ranking: [{ id: "S1", scenario: "Y", priority: "P2", reason: "Made up", tags: [] }],
+      };
+      expect(buildJiraCsv(pipedInput)).toContain("\n| input | output |\n| a \\| b | c \\\\ d |\"");
+      expect(buildPlaywrightSpec(pipedInput)).toContain("    //   | a \\| b | c \\\\ d |\n");
+    });
+
+    it("rewrites a question about something missing and leaves other terms alone", () => {
+      const summaries = buildJiraCsv(outlineInput)
+        .split("\r\n")
+        .slice(1, 5)
+        .map((row) => row.split('","')[0].slice(1));
+      expect(summaries).toEqual([
+        "Clarify (missing): supported currencies",
+        "Clarify (missing): refund window",
+        "Clarify: promptly",
+        "Clarify: Missing:",
+      ]);
+    });
+
+    it("labels a test case whose scenario is tagged @needs-clarification, and only that one", () => {
+      const csv = buildJiraCsv(outlineInput);
+      expect(csv).toContain('"Test: Declined card shows an error","Test","Medium","test-case AC-2 EC-1 needs-clarification"');
+      expect(csv).toContain('"Test: Successful top-up","Test","High","test-case AC-1","');
+    });
+
+    it("exports a scenario with no Examples exactly as before", () => {
+      const plain: ReportInput = { ...outlineInput, ambiguities: [], scenarios: [outline.scenarios[0]], ranking: [outlineInput.ranking[0]] };
+      expect(buildJiraCsv(plain)).toBe(
+        [
+          '"Summary","Issue Type","Priority","Labels","Description"',
+          '"Test: Successful top-up","Test","High","test-case AC-1","Priority reason: Core flow\n\nGiven a customer with a valid card\nWhen the customer tops up 500\nThen the balance increases by 500"',
+          "",
+        ].join("\r\n"),
+      );
+      expect(buildPlaywrightSpec(plain)).toBe(
+        [
+          "import { test } from '@playwright/test';",
+          "",
+          "// Generated by Spec Interrogator from the .feature file.",
+          "// Each test is marked fixme until its steps are implemented.",
+          "",
+          'test.describe("Wallet top-up", () => {',
+          '  test.fixme("Successful top-up", { tag: ["@AC-1","@P1"] }, async ({ page }) => {',
+          "    void page;",
+          "    // Given a customer with a valid card",
+          "    // When the customer tops up 500",
+          "    // Then the balance increases by 500",
+          "  });",
+          "});",
+          "",
+        ].join("\n"),
+      );
+    });
+
+    it("still exports an outline whose ScenarioInfo carries no Examples table", () => {
+      const { examples, ...bare } = outline.scenarios[1];
+      expect(examples).toHaveLength(1);
+      const stripped: ReportInput = { ...outlineInput, scenarios: [outline.scenarios[0], bare] };
+      expect(buildJiraCsv(stripped)).not.toContain("Examples:");
+      const spec = buildPlaywrightSpec(stripped);
+      expect(spec).not.toContain("// Examples:");
+      expect(spec).toContain("// Scenario Outline: run once per Examples row (2).");
+    });
   });
 
   it("produces four files with safe names", () => {

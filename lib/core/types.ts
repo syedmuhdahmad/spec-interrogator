@@ -103,7 +103,14 @@ export interface ScenarioInfo {
   tagLine?: number;
   isOutline: boolean;
   exampleRows: number;
+  /** The Examples tables of a Scenario Outline, one entry per Examples block. Absent when there are none. */
+  examples?: ExamplesTable[];
   steps: { keyword: string; kind: string; text: string }[];
+}
+
+export interface ExamplesTable {
+  header: string[];
+  rows: string[][];
 }
 
 export interface StepIssue {
