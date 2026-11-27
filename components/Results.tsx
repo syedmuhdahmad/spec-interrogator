@@ -331,7 +331,10 @@ function PlanTab({ artifacts }: { artifacts: Partial<Artifacts> }) {
 
       {review ? (
         <section>
-          <h3 className="lbl mb-2 text-yellow">Skeptic&apos;s review</h3>
+          <h3 className="lbl mb-2 text-yellow">
+            Skeptic&apos;s review
+            {review.addressed ? <span className="chip ml-3 text-green">Addressed in the revision</span> : null}
+          </h3>
           {review.issues.length === 0 ? (
             <p className="text-muted">No problems raised.</p>
           ) : (

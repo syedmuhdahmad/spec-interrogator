@@ -140,6 +140,8 @@ export interface Review {
   verdict: "pass" | "revise";
   issues: ReviewIssue[];
   strengths: string[];
+  /** True once the Test Designer's revision for these issues passed the checks. */
+  addressed?: boolean;
 }
 
 export interface RankedScenario {

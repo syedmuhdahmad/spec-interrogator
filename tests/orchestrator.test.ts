@@ -157,14 +157,44 @@ describe("runPipeline", () => {
     expect(llm.count("designer")).toBe(0);
   });
 
-  it("stops at once on a gateway failure and shows the safe message, not the raw error", async () => {
+  it("stops on a gateway failure in a required step and shows the safe message, not the raw error", async () => {
     const llm = new ScriptedLlm((request) =>
-      request.agent === "planner" ? new UserFacingError("The LLM budget for this app is used up, so live runs are paused.", 503) : undefined,
+      request.agent === "analyst" ? new UserFacingError("The LLM budget for this app is used up, so live runs are paused.", 503) : undefined,
     );
     const { last, events } = await run(STORY, llm);
     expect(last).toEqual(expect.objectContaining({ type: "run_error", message: "The LLM budget for this app is used up, so live runs are paused." }));
-    expect(llm.calls).toHaveLength(1);
+    expect(llm.count("designer")).toBe(0);
     expect(JSON.stringify(events)).not.toMatch(/stack|at async/i);
+  });
+
+  it("still delivers the finished suite when the gateway fails late, in the Skeptic and the Ranker", async () => {
+    const down = new UserFacingError("The LLM gateway is rate-limiting requests. Please try again in a minute.", 429);
+    const llm = new ScriptedLlm((request) => (request.agent === "skeptic" || request.agent === "ranker" ? down : undefined));
+    const { artifacts, last } = await run(STORY, llm);
+
+    expect(last).toMatchObject({ type: "run_done", partial: true });
+    expect((last as { note?: string }).note).toMatch(/Skeptic's review failed.*rate-limiting/);
+    expect(artifacts.validation?.ok).toBe(true);
+    expect(artifacts.exports).toHaveLength(4);
+    expect(artifacts.ranking?.every((item) => item.priority === "P2")).toBe(true);
+  });
+
+  it("cuts off a model call that outlasts the time the run has left", async () => {
+    const hanging: LlmClient = {
+      mode: "mock",
+      complete: (request) =>
+        new Promise((_, reject) => request.signal?.addEventListener("abort", () => reject(new Error("aborted by signal")), { once: true })),
+    };
+    // Hard stop 1.1 s minus a 0.1 s reserve leaves about 1 s for the first call.
+    const { last } = await run(STORY, hanging, { runHardStopMs: 1_100, finishReserveMs: 100 });
+    expect(last).toMatchObject({ type: "run_error" });
+    expect((last as { message: string }).message).toMatch(/took too long/);
+  });
+
+  it("marks the Skeptic's issues as addressed once the revision passes the checks", async () => {
+    const { artifacts } = await run(STORY, new MockLlmClient(0));
+    expect(artifacts.review).toMatchObject({ verdict: "revise", addressed: true });
+    expect(artifacts.exports?.[0].content).toContain("addressed in this one");
   });
 
   it("hides the details of unexpected errors", async () => {
@@ -178,7 +208,8 @@ describe("runPipeline", () => {
     const { last } = await run(STORY, llm, { maxRunTokens: 150 });
     expect(last).toMatchObject({ type: "run_error" });
     expect((last as { message: string }).message).toMatch(/reached its limit of 150 tokens/);
-    expect(llm.calls.length).toBeLessThanOrEqual(3);
+    // The Planner's call takes the run over its allowance; no call is made after that.
+    expect(llm.calls).toHaveLength(1);
   });
 
   it("skips optional steps when the time limit is close, and says so", async () => {

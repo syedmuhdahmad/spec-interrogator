@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { UserFacingError } from "@/lib/core/errors";
 import type { LlmClient, LlmRequest, LlmResponse } from "./types";
 
-const REQUEST_TIMEOUT_MS = 100_000;
+const REQUEST_TIMEOUT_MS = 90_000;
 
 /**
  * Talks to the organisers' LiteLLM gateway, which speaks the OpenAI chat API.
@@ -18,8 +18,8 @@ export class LiteLlmClient implements LlmClient {
       baseURL: options.baseUrl,
       apiKey: options.apiKey,
       timeout: REQUEST_TIMEOUT_MS,
-      // The SDK backs off and retries 429s and 5xx responses on its own.
-      maxRetries: 2,
+      // The SDK backs off and retries a 429 or 5xx once on its own.
+      maxRetries: 1,
     });
   }
 

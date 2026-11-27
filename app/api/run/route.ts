@@ -6,7 +6,7 @@ import { createLlmClient } from "@/lib/llm";
 import { runPipeline } from "@/lib/orchestrator";
 import { ConcurrencyGate, MemoryRateLimiter } from "@/lib/ratelimit";
 import { clientKey, isSameOrigin, readBodyLimited } from "@/lib/security";
-import { FetchGitHubClient } from "@/lib/tools/github";
+import { FetchGitHubClient, parseIssueUrl } from "@/lib/tools/github";
 
 // Vercel Hobby with Fluid compute allows 300 seconds. The pipeline stops itself earlier.
 export const maxDuration = 300;
@@ -51,8 +51,20 @@ export async function POST(request: Request): Promise<Response> {
     parsed.data.kind === "github"
       ? { kind: "github", url: parsed.data.url }
       : { kind: "text", text: parsed.data.text, title: parsed.data.title };
-  if (input.kind === "text" && input.text.length > LIMITS.maxInputChars) {
-    return refuse(413, `Stories are limited to ${LIMITS.maxInputChars.toLocaleString("en-US")} characters.`);
+  // Input that could never run is refused here, before it can use up anyone's rate allowance.
+  if (input.kind === "text") {
+    if (input.text.length > LIMITS.maxInputChars) {
+      return refuse(413, `Stories are limited to ${LIMITS.maxInputChars.toLocaleString("en-US")} characters.`);
+    }
+    if (input.text.length < LIMITS.minInputChars) {
+      return refuse(400, "There is not enough text to analyse. Please give at least a couple of sentences.");
+    }
+  } else {
+    try {
+      parseIssueUrl(input.url);
+    } catch (error) {
+      return refuse(400, error instanceof UserFacingError ? error.message : "That is not a GitHub issue link.");
+    }
   }
 
   const config = getServerConfig();
@@ -67,16 +79,21 @@ export async function POST(request: Request): Promise<Response> {
     return refuse(503, error instanceof UserFacingError ? error.message : "The app is not configured.");
   }
 
+  // The concurrency slot is taken first, so being turned away as "busy" does not
+  // use up a visitor's own allowance. Every refusal after this point gives it back.
+  const release = gate.enter();
+  if (!release) return refuse(429, "All agents are busy with other runs. Please try again in a minute.", 30);
+
   const ipDecision = perIp.take(clientKey(request.headers));
   if (!ipDecision.allowed) {
-    return refuse(429, "You have started several runs in a short time. Please wait a few minutes.", ipDecision.retryAfterSec);
+    release();
+    return refuse(429, "Several runs were started from your network in a short time. Please wait a few minutes.", ipDecision.retryAfterSec);
   }
   const globalDecision = global.take("all");
   if (!globalDecision.allowed) {
+    release();
     return refuse(429, "The app has reached its hourly run limit. Please try again later.", globalDecision.retryAfterSec);
   }
-  const release = gate.enter();
-  if (!release) return refuse(429, "All agents are busy with other runs. Please try again in a minute.", 30);
 
   const controller = new AbortController();
   const hardStop = setTimeout(() => controller.abort(), LIMITS.runHardStopMs);

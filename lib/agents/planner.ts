@@ -20,7 +20,7 @@ export async function runPlanner(context: AgentContext, story: StoryDoc): Promis
   return runJsonAgent(context, {
     agent: "planner",
     system: SYSTEM,
-    user: `Title: ${story.title}\n\n${untrusted("requirement", story.text)}`,
+    user: untrusted("requirement", story.text),
     schema: planSchema,
     describe: (plan) => `${plan.domain}, ${plan.riskLevel} risk. Focus: ${plan.focusAreas.slice(0, 3).join("; ")}.`,
   });

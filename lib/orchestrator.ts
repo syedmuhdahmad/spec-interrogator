@@ -68,7 +68,16 @@ export async function runPipeline(
   const startedAt = now();
   const emit: Emit = (body) => sink({ ...body, t: now() - startedAt } as RunEvent);
   const usage = new UsageMeter(deps.limits.maxRunTokens, deps.prices);
-  const context: AgentContext = { llm: deps.llm, models: deps.models, usage, emit, signal, now };
+  const context: AgentContext = {
+    llm: deps.llm,
+    models: deps.models,
+    usage,
+    emit,
+    signal,
+    now,
+    // A single slow call is cut off in time for the Reporter to still build the files.
+    callTimeoutMs: () => deps.limits.runHardStopMs - deps.limits.finishReserveMs - (now() - startedAt),
+  };
 
   /** Things the reader should know about how this run fell short, shown with the result. */
   const notes: string[] = [];
@@ -80,10 +89,18 @@ export async function runPipeline(
     return false;
   };
   /**
-   * Only an agent's unusable output is survivable. Anything else (cancelled,
-   * over budget, gateway down, a bug) would fail the same way on the next step.
+   * For steps the run can finish without. Only a cancelled run stops here;
+   * any other failure is recorded and the run carries on with what it has, so
+   * a late gateway error never throws away a suite that is already written.
+   * The two steps nothing can replace (Analyst, first draft) do not use this.
    */
-  const isFatal = (error: unknown) => signal.aborted || !(error instanceof AgentOutputError);
+  const carryOnAfter = (error: unknown, note: string): void => {
+    if (signal.aborted) throw error;
+    if (!(error instanceof AgentOutputError) && !(error instanceof UserFacingError)) {
+      console.error("[pipeline] optional step failed:", error instanceof Error ? error.message : error);
+    }
+    notes.push(error instanceof UserFacingError ? `${note} (${error.message})` : note);
+  };
 
   emit({
     type: "run_start",
@@ -103,9 +120,8 @@ export async function runPipeline(
     try {
       plan = await runPlanner(context, story);
     } catch (error) {
-      if (isFatal(error)) throw error;
+      carryOnAfter(error, "The Planner failed, so a neutral brief was used.");
       plan = fallbackPlan(story);
-      notes.push("The Planner failed, so a neutral brief was used.");
     }
     emit({ type: "artifact", key: "plan", data: plan });
 
@@ -114,7 +130,7 @@ export async function runPipeline(
     emit({ type: "artifact", key: "criteria", data: criteria });
 
     // 4. Specialists in parallel
-    const { ambiguities, edgeCases, history } = await runSpecialists(context, deps, story, plan, criteria, isFatal, notes);
+    const { ambiguities, edgeCases, history } = await runSpecialists(context, deps, story, plan, criteria, carryOnAfter);
     emit({ type: "artifact", key: "ambiguities", data: ambiguities });
     emit({ type: "artifact", key: "edgeCases", data: edgeCases });
     if (history) emit({ type: "artifact", key: "history", data: history });
@@ -149,8 +165,7 @@ export async function runPipeline(
         try {
           current = validate(await design({ kind: "fix", previous: current.feature, report: current.report }));
         } catch (error) {
-          if (isFatal(error)) throw error;
-          notes.push("A fix round failed, so the earlier draft was kept.");
+          carryOnAfter(error, "A fix round failed, so the earlier draft was kept.");
           break;
         }
       }
@@ -170,8 +185,7 @@ export async function runPipeline(
         review = await runSkeptic(context, draft.feature, criteria, edgeCases);
         emit({ type: "artifact", key: "review", data: review });
       } catch (error) {
-        if (isFatal(error)) throw error;
-        notes.push("The Skeptic's review failed and was skipped.");
+        carryOnAfter(error, "The Skeptic's review failed and was skipped.");
       }
 
       if (review?.verdict === "revise" && deps.limits.maxReviseRounds > 0 && hasTimeFor("designer", "The revision")) {
@@ -188,6 +202,8 @@ export async function runPipeline(
           const revised = await fixUntilValid(validate(await design({ kind: "revise", previous: draft.feature, issues: review.issues })));
           if (revised.report.ok) {
             draft = revised;
+            review = { ...review, addressed: true };
+            emit({ type: "artifact", key: "review", data: review });
           } else {
             // Never trade a suite that passes the checks for one that does not.
             notes.push("The revision failed the automated checks, so the earlier valid suite was kept.");
@@ -196,8 +212,7 @@ export async function runPipeline(
             emit({ type: "artifact", key: "validation", data: draft.report });
           }
         } catch (error) {
-          if (isFatal(error)) throw error;
-          notes.push("The revision failed, so the earlier suite was kept.");
+          carryOnAfter(error, "The revision failed, so the earlier suite was kept.");
         }
       }
     }
@@ -209,9 +224,8 @@ export async function runPipeline(
           ? await runRiskRanker(context, draft.parsed.scenarios, plan, ambiguities, history)
           : fallbackRanking(draft.parsed.scenarios);
       } catch (error) {
-        if (isFatal(error)) throw error;
+        carryOnAfter(error, "Risk ranking failed, so every scenario has the default priority.");
         ranking = fallbackRanking(draft.parsed.scenarios);
-        notes.push("Risk ranking failed, so every scenario has the default priority.");
       }
     }
     emit({ type: "artifact", key: "ranking", data: ranking });
@@ -331,8 +345,7 @@ async function runSpecialists(
   story: StoryDoc,
   plan: Plan,
   criteria: Criterion[],
-  isFatal: (error: unknown) => boolean,
-  notes: string[],
+  carryOnAfter: (error: unknown, note: string) => void,
 ): Promise<{ ambiguities: Ambiguity[]; edgeCases: EdgeCase[]; history?: HistoryReport }> {
   const wantsHistory = story.source === "github" && Boolean(story.repo) && deps.limits.maxHistorySearches > 0;
 
@@ -348,8 +361,7 @@ async function runSpecialists(
 
   const settle = <T>(result: PromiseSettledResult<T>, fallback: T, label: string): T => {
     if (result.status === "fulfilled") return result.value;
-    if (isFatal(result.reason)) throw result.reason;
-    notes.push(`${label} failed and was left out.`);
+    carryOnAfter(result.reason, `${label} failed and was left out.`);
     return fallback;
   };
 

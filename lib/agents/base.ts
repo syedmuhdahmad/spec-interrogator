@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { AgentOutputError } from "@/lib/core/errors";
+import { AgentOutputError, UserFacingError } from "@/lib/core/errors";
 import { extractFence, extractJson } from "@/lib/core/json";
 import type { AgentId, Emit } from "@/lib/core/types";
-import type { LlmClient, LlmMessage } from "@/lib/llm/types";
+import type { LlmClient, LlmMessage, LlmRequest, LlmResponse } from "@/lib/llm/types";
 import type { UsageMeter } from "@/lib/llm/usage";
 import { agentSpec, type ModelTier } from "./registry";
 
@@ -14,6 +14,8 @@ export interface AgentContext {
   emit: Emit;
   signal: AbortSignal;
   now: () => number;
+  /** Longest a single model call may take right now, so one slow call cannot eat the whole run. */
+  callTimeoutMs?: () => number;
 }
 
 interface AgentCall<T> {
@@ -52,13 +54,12 @@ async function callAgent<T>(context: AgentContext, call: AgentCall<T>): Promise<
       // Checked before every call: a cancelled or over-budget run must not spend more.
       context.signal.throwIfAborted();
       context.usage.assertWithinBudget();
-      const response = await context.llm.complete({
+      const response = await completeWithinTime(context, {
         agent: call.agent,
         model,
         maxTokens: spec.maxTokens ?? 1000,
         system: call.system,
         messages: [...messages],
-        signal: context.signal,
       });
       context.usage.record(tier, response.tokensIn, response.tokensOut);
       tokensIn += response.tokensIn;
@@ -103,6 +104,22 @@ async function callAgent<T>(context: AgentContext, call: AgentCall<T>): Promise<
       tokensOut,
       message: error instanceof AgentOutputError ? "Output could not be used after one retry." : "The model call failed.",
     });
+    throw error;
+  }
+}
+
+/** Makes one model call, cut short if it outlasts the time this run can still afford. */
+async function completeWithinTime(context: AgentContext, request: Omit<LlmRequest, "signal">): Promise<LlmResponse> {
+  const limit = context.callTimeoutMs?.();
+  if (limit === undefined) return context.llm.complete({ ...request, signal: context.signal });
+
+  const timeout = AbortSignal.timeout(Math.max(1_000, limit));
+  try {
+    return await context.llm.complete({ ...request, signal: AbortSignal.any([context.signal, timeout]) });
+  } catch (error) {
+    if (timeout.aborted && !context.signal.aborted) {
+      throw new UserFacingError("The model took too long to answer, so that step was cut short.", 504);
+    }
     throw error;
   }
 }

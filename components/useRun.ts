@@ -224,23 +224,27 @@ export function useRun() {
         let buffer = "";
         let finished = false;
 
+        const handleLine = (line: string) => {
+          if (!line.trim()) return;
+          try {
+            const event = JSON.parse(line) as RunEvent;
+            if (event.type === "run_done" || event.type === "run_error") finished = true;
+            dispatch({ type: "event", event, recorded: false });
+          } catch {
+            // A malformed line is skipped rather than ending the run.
+          }
+        };
+
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          // A chunk can end mid-line or mid-character: keep the remainder for the next one.
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-              const event = JSON.parse(line) as RunEvent;
-              if (event.type === "run_done" || event.type === "run_error") finished = true;
-              dispatch({ type: "event", event, recorded: false });
-            } catch {
-              // A malformed line is skipped rather than ending the run.
-            }
-          }
+          lines.forEach(handleLine);
         }
+        handleLine(buffer + decoder.decode());
         if (!finished) dispatch({ type: "fail", message: "The connection closed before the run finished. Results so far are shown." });
       } catch (error) {
         if (controller.signal.aborted) {

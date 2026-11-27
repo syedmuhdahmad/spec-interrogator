@@ -75,13 +75,13 @@ Steps 4, 5 and 6 run in parallel.
 | Risk | What stops it |
 | --- | --- |
 | Runaway loops | Hard caps: 2 fix rounds, 1 revision, 2 searches, 1 retry per agent on unusable output |
-| Runaway spend | Each run stops at 90,000 tokens or 285 seconds. `max_tokens` is set per agent. Cheap steps use the fast model |
-| Abuse of the public URL | Same-origin check, 32 KB body limit, 8,000 character input limit, 5 runs per IP per 10 minutes, 4 runs at once |
+| Runaway spend | Each run stops at 90,000 tokens or 285 seconds. `max_tokens` is set per agent. Cheap steps use the fast model. Closing the page or pressing Stop cancels the model calls (`supportsCancellation` in `vercel.json`) |
+| Abuse of the public URL | Requests must carry the app's own Origin, 32 KB body limit, 8,000 character input limit, 6 runs per IP per 10 minutes, 20 per hour per instance, 4 at once |
 | Budget running out while judges are testing | `DEMO_MODE=replay` serves recorded sample runs, clearly labelled as recorded, with no model calls |
 | Key exposure | The key is read only on the server from the environment. No `NEXT_PUBLIC_` secrets. `npm run check:secrets` and CI scan every tracked file |
 | Prompt injection in pasted text | The requirement is wrapped in tags and every agent is told it is data, not instructions. Closing tags inside the text are defused. No agent has a tool that changes anything |
 | Request forgery through the GitHub input | Only `api.github.com` is ever contacted, with owner, repo and number validated by a strict pattern. A user URL is never fetched directly |
-| Output injection | Model output is rendered as text only. CSV cells are protected against spreadsheet formula injection |
+| Output injection | Model output is rendered as text only. CSV cells are protected against spreadsheet formula injection. Step text written into the generated Playwright file cannot break out of its comment |
 
 Security headers (CSP, `X-Frame-Options`, `Referrer-Policy`, HSTS and others) are set in `next.config.ts`. The CSP allows `'unsafe-inline'` for scripts and styles because Next.js needs it without per-request nonces; everything else is same-origin only. Fonts are bundled, so the browser makes no third-party requests.
 
@@ -119,7 +119,7 @@ To work on the UI without spending tokens, set `MOCK_LLM=1` in `.env.local`. The
 
 ```bash
 npm run verify    # secret scan, lint, type-check, tests, production build
-npm test          # 64 unit and pipeline tests
+npm test          # 71 unit and pipeline tests
 ```
 
 The pipeline tests run the real orchestrator against a scripted model and assert the things that matter: step order, both feedback loops, loop caps when the Test Designer never produces a valid suite, graceful degradation when an agent fails, the token budget, cancellation, and that invented quotes and citations are caught.

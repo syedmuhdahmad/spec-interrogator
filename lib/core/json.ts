@@ -3,15 +3,21 @@
  * Models sometimes wrap JSON in a code fence or add a sentence around it.
  */
 
-const FENCE = /```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)```/;
+const OPENING_FENCE = /```[a-zA-Z0-9_-]*[ \t]*\n/;
 
-/** Returns the body of the first fenced code block, or the trimmed text if there is none. */
+/**
+ * Returns the body of the fenced code block in a reply, or the trimmed text if
+ * there is no fence. The block runs from the first opening fence to the LAST
+ * closing one, because the content may itself contain fences (a Gherkin doc
+ * string can be written with three backticks).
+ */
 export function extractFence(text: string): string {
-  const match = FENCE.exec(text);
-  if (match) return match[1].trim();
-  // An opening fence with no closing one: the reply was cut off. Keep what arrived.
-  const open = /```[a-zA-Z0-9_-]*\s*\n([\s\S]*)$/.exec(text);
-  return (open ? open[1] : text).trim();
+  const open = OPENING_FENCE.exec(text);
+  if (!open) return text.trim();
+  const bodyStart = open.index + open[0].length;
+  const close = text.lastIndexOf("```");
+  // No closing fence after the opening one: the reply was cut off. Keep what arrived.
+  return (close > bodyStart ? text.slice(bodyStart, close) : text.slice(bodyStart)).trim();
 }
 
 /** Parses the first JSON object found in the text. Throws if none parses. */

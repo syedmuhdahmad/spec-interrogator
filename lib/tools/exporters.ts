@@ -44,6 +44,16 @@ function mdCell(value: string): string {
   return value.replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " ").trim();
 }
 
+/**
+ * Makes text safe inside a `//` comment in generated code. Every character
+ * JavaScript treats as a line break (including U+2028 and U+2029) and every
+ * control character becomes a space, so step text can never end the comment
+ * and continue as code.
+ */
+export function commentSafe(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim();
+}
+
 function slug(value: string): string {
   return (
     value
@@ -127,7 +137,7 @@ export function buildTestPlan(input: ReportInput): string {
   }
 
   if (review && review.issues.length) {
-    out.push("## Reviewer notes", "");
+    out.push(review.addressed ? "## Reviewer notes (raised on the previous draft and addressed in this one)" : "## Reviewer notes", "");
     for (const issue of review.issues) {
       out.push(`- [${issue.severity}] ${issue.scenario}: ${issue.problem} Suggested fix: ${issue.fix}`);
     }
@@ -158,7 +168,7 @@ export function buildPlaywrightSpec(input: ReportInput): string {
     out.push(`  test.fixme(${JSON.stringify(scenario.name)}, { tag: ${JSON.stringify(tags)} }, async ({ page }) => {`);
     out.push("    void page;");
     for (const step of scenario.steps) {
-      out.push(`    // ${step.keyword} ${step.text.replace(/\s*\n\s*/g, " ")}`);
+      out.push(`    // ${commentSafe(`${step.keyword} ${step.text}`)}`);
     }
     if (scenario.isOutline) out.push(`    // Scenario Outline: run once per Examples row (${scenario.exampleRows}).`);
     out.push("  });");

@@ -17,7 +17,7 @@ Submissions close Monday 30 November 2026 at 2:00 PM PKT. Each phase is a GitHub
 - [x] Orchestrator with capped feedback loops and graceful degradation
 - [x] Streaming API route with rate limits and request checks
 - [x] UI: samples, live timeline, results tabs, downloads
-- [x] 64 tests, secret scanner, CI
+- [x] 71 tests, secret scanner, CI
 - [ ] Vercel project connected, environment variables set
 - [ ] First live run against the real models
 

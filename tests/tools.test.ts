@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Criterion, EdgeCase } from "@/lib/core/types";
 import { checkCoverage } from "@/lib/tools/coverage";
-import { buildExports, buildJiraCsv, buildPlaywrightSpec, csvCell, type ReportInput } from "@/lib/tools/exporters";
+import { buildExports, buildJiraCsv, buildPlaywrightSpec, commentSafe, csvCell, type ReportInput } from "@/lib/tools/exporters";
 import { applyPriorityTags, parseGherkin } from "@/lib/tools/gherkin";
 import { parseIssueUrl, sanitizeSearchTerms } from "@/lib/tools/github";
 
@@ -61,6 +61,13 @@ describe("parseGherkin", () => {
   it("inherits tags from a Rule", () => {
     const parsed = parseGherkin("Feature: X\n  @AC-1\n  Rule: R\n    Scenario: Y\n      When a\n      Then b\n");
     expect(parsed.scenarios[0].tags).toContain("@AC-1");
+  });
+
+  it("does not let tags on the Feature line claim coverage for every scenario", () => {
+    const blanket = "@AC-1 @AC-2 @EC-1\nFeature: X\n  Scenario: Y\n    When a\n    Then b\n";
+    const parsed = parseGherkin(blanket);
+    expect(parsed.scenarios[0].tags).toEqual([]);
+    expect(checkCoverage(parsed, criteria, edgeCases).uncoveredACs).toEqual(["AC-1", "AC-2"]);
   });
 });
 
@@ -129,6 +136,13 @@ describe("applyPriorityTags", () => {
     expect(reparsed.ok).toBe(true);
     expect(reparsed.scenarios[0].tags).toEqual(["@AC-1", "@P1"]);
     expect(reparsed.scenarios[1].tags).toEqual(["@AC-2", "@EC-1", "@P3"]);
+  });
+
+  it("puts the priority before a trailing comment on the tag line", () => {
+    const commented = "Feature: X\n  @AC-1 #covers the happy path\n  Scenario: Y\n    When a\n    Then b\n";
+    const tagged = applyPriorityTags(commented, parseGherkin(commented).scenarios, new Map([["S1", "P1"]]));
+    expect(tagged).toContain("@AC-1 @P1 #covers the happy path");
+    expect(parseGherkin(tagged).scenarios[0].tags).toEqual(["@AC-1", "@P1"]);
   });
 
   it("adds a tag line when a scenario has none", () => {
@@ -214,6 +228,18 @@ describe("exporters", () => {
     expect(spec).toContain("test.fixme(\"It's a `tricky` \\\"name\\\" ${x}\"");
     expect(spec).toContain('tag: ["@AC-1","@P1"]');
     expect(spec).toContain("// When the customer tops up 500");
+  });
+
+  it("keeps step text inside its comment whatever line-break characters it contains", () => {
+    const hostile = "x\u2028}); require('child_process').exec('id'); test('y', async () => {\r//\u2029z\u0085";
+    expect(commentSafe(hostile)).not.toMatch(/[\r\n\u2028\u2029\u0085]/);
+    const spec = buildPlaywrightSpec({
+      ...input,
+      scenarios: [{ ...parsed.scenarios[0], steps: [{ keyword: "When", kind: "Action", text: hostile }] }],
+    });
+    // Every line of generated code that mentions the payload must still be a comment.
+    const offending = spec.split(/\r\n|[\n\r\u2028\u2029]/).filter((line) => line.includes("child_process") && !line.trimStart().startsWith("//"));
+    expect(offending).toEqual([]);
   });
 
   it("produces four files with safe names", () => {

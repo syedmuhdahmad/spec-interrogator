@@ -17,17 +17,20 @@ export function clientKey(headers: Headers): string {
 }
 
 /**
- * True when a browser request comes from this site's own pages. Browsers
- * always send Origin on a cross-site POST, so this stops other websites from
- * spending the app's LLM budget through their visitors. Tools that send no
- * Origin (curl, tests) are allowed here and handled by the rate limiter.
+ * True when the request comes from this site's own pages. Browsers send an
+ * Origin header on every POST made with fetch, so a request without one is
+ * not from the app's UI and is refused. This stops other websites from
+ * spending the app's LLM budget through their visitors, and turns away casual
+ * scripts and crawlers. It is not authentication: a determined caller can
+ * forge the header, which is what the rate limits and the key's own budget
+ * are for.
  */
 export function isSameOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
-  if (!origin) return request.headers.get("sec-fetch-site") !== "cross-site";
+  if (!origin) return request.headers.get("sec-fetch-site") === "same-origin";
   try {
     const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
-    return new URL(origin).host === host;
+    return Boolean(host) && new URL(origin).host === host;
   } catch {
     return false;
   }

@@ -86,6 +86,11 @@ function plain(markdown: string, max: number): string {
     .slice(0, max);
 }
 
+/** Links shown in the UI must point at github.com, whatever the API returned. */
+function safeIssueUrl(candidate: string | undefined, repo: string, number: number): string {
+  return candidate?.startsWith("https://github.com/") ? candidate : `https://github.com/${repo}/issues/${number}`;
+}
+
 export class FetchGitHubClient implements GitHubClient {
   constructor(private readonly token?: string) {}
 
@@ -138,7 +143,7 @@ export class FetchGitHubClient implements GitHubClient {
 
     return {
       repo: `${owner}/${repo}`,
-      url: issue.html_url ?? `https://github.com/${owner}/${repo}/issues/${number}`,
+      url: safeIssueUrl(issue.html_url, `${owner}/${repo}`, number),
       title: (issue.title ?? "Untitled issue").slice(0, 200),
       body: plain(issue.body ?? "", 6_000),
       labels: labelNames(issue.labels),
@@ -157,7 +162,7 @@ export class FetchGitHubClient implements GitHubClient {
       .map((item) => ({
         number: item.number as number,
         title: (item.title ?? "").slice(0, 160),
-        url: item.html_url ?? `https://github.com/${repo}/issues/${item.number}`,
+        url: safeIssueUrl(item.html_url, repo, item.number as number),
         labels: labelNames(item.labels),
         snippet: plain(item.body ?? "", 280),
       }));

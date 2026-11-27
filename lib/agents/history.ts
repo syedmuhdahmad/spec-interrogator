@@ -45,7 +45,7 @@ export async function runHistoryScout(
     agent: "history",
     round: 1,
     system: QUERY_SYSTEM,
-    user: `Repository: ${repo}\nTitle: ${story.title}\n\n${requirement}`,
+    user: `Repository: ${repo}\n\n${requirement}`,
     schema: historyQueriesSchema,
     startMessage: "Choosing what to search for.",
     describe: (value) => `Will search for: ${value.queries.map((query) => `"${query}"`).join(", ")}.`,

@@ -26,6 +26,13 @@ describe("extractFence", () => {
     expect(extractFence("Feature: Y")).toBe("Feature: Y");
   });
 
+  it("keeps a doc string written with backticks inside the block", () => {
+    const reply = "```gherkin\nFeature: X\n  Scenario: Y\n    Given a payload\n      ```\n      {\"a\": 1}\n      ```\n    Then ok\n```";
+    const body = extractFence(reply);
+    expect(body.startsWith("Feature: X")).toBe(true);
+    expect(body.endsWith("Then ok")).toBe(true);
+  });
+
   it("keeps what arrived when the closing fence is missing", () => {
     expect(extractFence("```gherkin\nFeature: X\n  Scenario: cut")).toBe("Feature: X\n  Scenario: cut");
   });
@@ -151,7 +158,9 @@ describe("request checks", () => {
     expect(isSameOrigin(request({ origin: "https://evil.example", host: "app.example" }))).toBe(false);
     expect(isSameOrigin(request({ origin: "null", host: "app.example" }))).toBe(false);
     expect(isSameOrigin(request({ host: "app.example", "sec-fetch-site": "cross-site" }))).toBe(false);
-    expect(isSameOrigin(request({ host: "app.example" }))).toBe(true);
+    expect(isSameOrigin(request({ host: "app.example", "sec-fetch-site": "same-origin" }))).toBe(true);
+    // No Origin at all: not the app's UI (a script or crawler), so it is refused.
+    expect(isSameOrigin(request({ host: "app.example" }))).toBe(false);
   });
 
   it("uses the first forwarded address as the rate-limit key", () => {

@@ -42,7 +42,8 @@ export function parseGherkin(text: string): ParsedFeature {
       return { ok: false, featureName: "", scenarios: [], errors: [{ line: 1, message: "No Feature found." }] };
     }
 
-    const featureTags = feature.tags.map((tag) => tag.name);
+    // Tags on the Feature line are deliberately not inherited: one line of
+    // "@AC-1 @AC-2 ..." there would otherwise claim coverage for everything.
     const collected: { scenario: AstScenario; inherited: string[] }[] = [];
 
     const walk = (children: readonly AstChild[], inherited: string[]) => {
@@ -53,7 +54,7 @@ export function parseGherkin(text: string): ParsedFeature {
         }
       }
     };
-    walk(feature.children as readonly AstChild[], featureTags);
+    walk(feature.children as readonly AstChild[], []);
 
     const scenarios = collected.map(({ scenario, inherited }, index): ScenarioInfo => {
       let previousKind = "Unknown";
@@ -118,7 +119,10 @@ export function applyPriorityTags(
 
     if (scenario.tagLine) {
       const index = scenario.tagLine - 1;
-      lines[index] = `${lines[index].trimEnd()} @${priority}`;
+      // A tag line may end in a comment; the new tag has to go before it.
+      const comment = /\s+#.*$/.exec(lines[index]);
+      const tags = comment ? lines[index].slice(0, comment.index) : lines[index].trimEnd();
+      lines[index] = `${tags} @${priority}${comment ? comment[0] : ""}`;
     } else {
       const index = scenario.line - 1;
       const indent = /^\s*/.exec(lines[index] ?? "")?.[0] ?? "  ";

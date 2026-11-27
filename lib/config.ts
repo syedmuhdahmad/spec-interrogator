@@ -31,6 +31,8 @@ export interface Limits {
   runHardStopMs: number;
   /** Total tokens (in + out) one run may spend before it is stopped. */
   maxRunTokens: number;
+  /** Time kept back before the hard stop so the Reporter can still build the files. */
+  finishReserveMs: number;
 }
 
 export const LIMITS: Limits = {
@@ -43,14 +45,18 @@ export const LIMITS: Limits = {
   optionalStepReserveMs: 70_000,
   runHardStopMs: 285_000,
   maxRunTokens: 90_000,
+  finishReserveMs: 8_000,
 };
 
 export const RATE_LIMITS = {
-  /** Runs one IP address may start per window. */
-  perIpRuns: 5,
+  /**
+   * Runs one IP address may start per window. Kept loose on purpose: several
+   * judges may share one office address.
+   */
+  perIpRuns: 6,
   perIpWindowMs: 10 * 60_000,
   /** Runs this server instance will start per window, across all visitors. */
-  globalRuns: 40,
+  globalRuns: 20,
   globalWindowMs: 60 * 60_000,
   /** Runs this instance will execute at once (LiteLLM allows 60 requests a minute). */
   maxConcurrentRuns: 4,
