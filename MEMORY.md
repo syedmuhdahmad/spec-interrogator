@@ -12,14 +12,15 @@ Every agent working on this repository reads this file first and updates it befo
 
 ## Where things stand
 
-Last updated: Fri 27 Nov 2026, 13:00 PKT.
+Last updated: Fri 27 Nov 2026, 13:40 PKT.
 
 - **Deadline:** submissions close Mon 30 Nov 2026 at 2:00 PM PKT. Aim to submit by 10:00 AM. The app must stay live until winners are announced in mid-December.
 - **Live:** https://spec-interrogator.vercel.app, deployed from `main` by Vercel (project `spec-interrogator`). Every push to `main` redeploys. A changed environment variable needs a redeploy to take effect.
 - **Repo:** `syedmuhdahmad/spec-interrogator`, public. CI (GitHub Actions) runs the secret scan, lint, type-check, tests and build on every push.
-- **Phase 1 (Foundation) is done.** The whole pipeline works on the live site with the real models. 102 tests pass.
+- **Phase 1 (Foundation) is done.** The whole pipeline works on the live site with the real models. 109 tests pass.
 - **Phase 2 (Live tuning) is under way.** Only one of the four samples (CASE 01, wallet top-up) has been run live. The other three have never been run against the real models.
-- **Six weaknesses from a second real run are fixed and pushed, but unconfirmed.** See the 27 Nov commits "Show why a reply was rejected when the retry succeeds", "Keep Scenario Outline examples in the Jira and Playwright exports" and "Stop the suite assuming answers to open questions". The code parts (tag handling, exports, retry reason) are tested. The prompt parts can only be confirmed by a live run on the deployed site.
+- **The six weaknesses from the second real run are fixed, and a third real run on the same story confirmed most of it.** Four held fully (no invented outcomes, the `@needs-clarification` tag in the right place, Examples in the exports, the Analyst keeps the actor). Two held mostly: 2 of 8 questions still join two decisions with "and" (it was 5 of 8 with three each), and one Risk Ranker reason still cites a loosely related question. The Skeptic did not object to placeholders. This is one story only; the samples have not been checked.
+- **Three export defects from that third run are fixed in code and tested** (commit "Name uncovered edge cases, keep the clarification tag in stubs, tidy file names").
 - **No recorded replays exist yet.** `public/replays/` is empty, so `DEMO_MODE=replay` has nothing to show.
 
 ## Facts worth knowing
@@ -89,17 +90,18 @@ Per-agent tokens in the tuned run: Planner 773, Analyst 1,338, Ambiguity Hunter 
 3. **Cancellation on Vercel is untested.** `vercel.json` sets `supportsCancellation` for the run route as Vercel's docs describe, but nobody has confirmed on the live site that pressing Stop ends the model calls.
 4. **Three samples are untested live.** The GitHub sample (`microsoft/playwright` issue 30976) was picked from a search listing and has never been fetched by the app.
 5. **No loop appears when the first draft passes.** That is correct, but judges then do not see the Validator send work back. Consider whether a sample should reliably show one. The owner has not decided.
-6. **More placeholder steps, unknown effect.** The suite will now hold more `<TBD: ...>` Then steps. Nobody has seen how that reads to a judge, or whether the Skeptic then asks for more revisions.
-7. **"Addressed in the revision" is not verified.** The chip and the test plan heading appear when a revised suite passes the parser and the coverage check. Nothing checks that the Skeptic's objections were really fixed.
-8. **No code checks that a Then step is observable.** "Then it works" passes the Validator; only the Skeptic can catch it.
+6. **Many placeholder steps on a vague story.** In the third real run 6 of 8 scenarios held a `<TBD: ...>` step. That is honest and the Skeptic left them alone, but nobody has judged how it reads on the made-up samples.
+7. **"Addressed in the revision" is not verified.** The chip and the test plan heading appear when a revised suite passes the parser and the coverage check. Nothing checks that the Skeptic's objections were really fixed. In the third real run all four notes were in fact fixed (checked by hand). The notes can name scenarios that the revision renamed.8. **No code checks that a Then step is observable.** "Then it works" passes the Validator; only the Skeptic can catch it.
 9. **Jira import is untested.** The Examples table header is written as an ordinary row, and nobody has imported the CSV into Jira.
+10. **A question can have no test.** The Analyst now keeps to the requirement's own list of criteria, so a task line that is not an acceptance criterion may get a client question and no scenario. Seen once. Do not change the prompt unless a sample shows it too.
+11. **The limit of eight questions can crowd one out.** Splitting bundled questions used the slots, and a question about an expected value that the earlier run asked was missing; the suite then asserted that value without a placeholder.
 
 ## Next steps
 
 In order. Each has a GitHub issue under its milestone.
 
-1. Run CASE 02, CASE 03 and the GitHub sample live, read the output as a QA lead would, and tune prompts (#9, #11, #12). Check first that the prompt fixes held: no step assumes an answer to an open question, each question covers one decision, the Analyst keeps the stated actor. Each run costs about $0.10 to $0.15. The owner runs them and pastes the output. Ask before spending.
-2. Decide with the owner whether a sample should reliably show a feedback loop. Give options and a recommendation; do not fake a loop.
+1. Run CASE 02, CASE 03 and the GitHub sample live, read the output as a QA lead would, and tune prompts (#9, #11, #12). Ask the owner for the Log tab as well as the files: the third real run came without it, so its tokens, time and cost are unknown. Check that the prompt fixes hold on the samples too, and watch for open risks 10 and 11. Each run costs about $0.10 to $0.15, more with a revision round. The owner runs them and pastes the output. Ask before spending.
+2. Decide with the owner whether a sample should reliably show a feedback loop. Give options and a recommendation; do not fake a loop. New evidence: the third real run produced a genuine Skeptic revision (a test that could not catch the fault it was tagged for), so loops do happen unprompted on a rich story.
 3. Compare the on-screen cost estimate with real LiteLLM spend and set `PRICE_MAIN` / `PRICE_FAST` if needed (#10).
 4. Add `GITHUB_TOKEN` (fine-grained, public repositories, read-only) on Vercel and redeploy (#12). The owner does this.
 5. Confirm on the live site that Stop cancels a run. Tell the owner how it will be checked before doing it.
@@ -108,6 +110,13 @@ In order. Each has a GitHub issue under its milestone.
 8. Phase 4: run the `hackathon-guard` agent, then submit (#18, #19, #20).
 
 ## Session log
+
+### Fri 27 Nov 2026 (Claude Code on the owner's machine, early afternoon)
+
+- The midday commits were pushed and deployed. The owner connected the Vercel connector for read-only use (deployment status and runtime logs). The plan keeps runtime logs for about one hour, and a clean run writes nothing to them.
+- Reviewed a third real run from its four export files, on the same non-sample story as the second, so the two could be compared line by line. See "Where things stand" for what held.
+- Fixed three export defects it showed, with tests (102 to 109): Playwright stubs lost the `@needs-clarification` tag, file names could end in a hyphen, and the test plan did not name the edge cases with no scenario.
+- Still open: the samples are unrun, the owner has not answered whether two server log lines may be added for the Stop check, and the loop decision has not been put to the owner.
 
 ### Fri 27 Nov 2026 (Claude Code on the owner's machine, midday)
 
